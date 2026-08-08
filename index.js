@@ -71,26 +71,29 @@ async function syncGuildRoles(guild) {
   return { updated, failed, failures };
 }
 
-async function publishRankingChannel(guild) {
-  const channelName = '후원금액-랭킹';
-  let channel = guild.channels.cache.find((item) => item.name === channelName && item.type === ChannelType.GuildText);
-  if (!channel) {
-    channel = await guild.channels.create({ name: channelName, type: ChannelType.GuildText });
+async function publishRankingChannel(guild, channel) {
+  if (!channel || channel.type !== ChannelType.GuildText) {
+    throw new Error('텍스트 채널을 선택해 주세요.');
+  }
+  if (!db) throw new Error('DATABASE_URL이 설정되지 않았습니다.');
+
+  const { rows: columns } = await db.query(`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_name = 'user_subscriptions'
+      AND column_name IN ('donation_amount', 'total_donation', 'total_donation_amount')
+  `);
+  const amountColumn = columns[0]?.column_name;
+  if (!amountColumn) {
+    throw new Error('user_subscriptions에 후원액 컬럼이 없습니다. donation_amount 컬럼을 추가해 주세요.');
   }
 
-  const tierOrder = { premium: 2, basic: 1, free: 0 };
   const members = await guild.members.fetch();
-  const ranking = [];
-  for (const member of members.values()) {
-    if (member.user.bot) continue;
-    const tier = await getTier(member.id);
-    ranking.push({ member, tier, score: tierOrder[tier] });
-  }
-  ranking.sort((a, b) => b.score - a.score || a.member.displayName.localeCompare(b.member.displayName));
-  const lines = ranking.slice(0, 10).map((item, index) =>
-    `${index + 1}. ${item.member} — ${item.tier.toUpperCase()} 등급`
-  );
-  await channel.send({ content: `🏆 **후원 등급 랭킹**\n\n${lines.join('\n') || '등록된 유저가 없습니다.'}\n\n※ 현재 DB에는 누적 후원금액이 저장되지 않아 등급 기준으로 표시됩니다.` });
+  const { rows } = await db.query(`SELECT user_id, ${amountColumn} AS amount FROM user_subscriptions WHERE ${amountColumn} > 0 ORDER BY ${amountColumn} DESC LIMIT 10`);
+  const lines = rows.map((row, index) => {
+    const member = members.get(row.user_id);
+    return `${index + 1}. ${member ? member : `<@${row.user_id}>`} — ${Number(row.amount).toLocaleString('ko-KR')}원`;
+  });
+  await channel.send({ content: `🏆 **후원금액 랭킹 TOP 10**\n\n${lines.join('\n') || '등록된 후원자가 없습니다.'}` });
   return channel;
 }
 
@@ -98,13 +101,14 @@ client.once('clientReady', () => {
   console.log(`Logged in as ${client.user.tag}`);
   client.application.commands.set([
     new SlashCommandBuilder().setName('등급역할').setDescription('모든 유저의 등급에 맞춰 역할을 부여합니다.'),
-    new SlashCommandBuilder().setName('랭킹체널').setDescription('후원 등급 랭킹 채널을 만들고 갱신합니다.'),
+    new SlashCommandBuilder().setName('랭킹채널').setDescription('선택한 채널에 후원금액 랭킹을 게시합니다.')
+      .addChannelOption((option) => option.setName('채널').setDescription('랭킹을 게시할 텍스트 채널').addChannelTypes(ChannelType.GuildText).setRequired(true)),
   ]).catch(console.error);
 });
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  if (!['등급역할', '랭킹체널'].includes(interaction.commandName)) return;
+  if (!['등급역할', '랭킹채널'].includes(interaction.commandName)) return;
   if (interaction.user.id !== ADMIN_USER_ID) {
     await interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', flags: MessageFlags.Ephemeral });
     return;
@@ -120,12 +124,72 @@ client.on('interactionCreate', async (interaction) => {
         (result.failed ? `\n실패: ${result.failed}명\n${failureText}` : '')
       );
     } else {
-      const channel = await publishRankingChannel(interaction.guild);
+      const channel = interaction.options.getChannel('채널');
+      await publishRankingChannel(interaction.guild, channel);
       await interaction.editReply(`${channel} 채널에 랭킹을 갱신했습니다.`);
     }
   } catch (error) {
     console.error('Slash command error:', error);
     await interaction.editReply('명령어 실행 중 오류가 발생했습니다. 봇의 역할 관리 권한과 DB 연결을 확인해 주세요.');
+  }
+});
+
+client.once('clientReady', async () => {
+  if (db) {
+    await db.query('ALTER TABLE user_subscriptions ADD COLUMN IF NOT EXISTS donation_amount INTEGER NOT NULL DEFAULT 0').catch(console.error);
+  }
+  await client.application.commands.create(
+    new SlashCommandBuilder()
+      .setName('후원금액')
+      .setDescription('유저의 누적 후원금액을 관리합니다.')
+      .addSubcommand((subcommand) => subcommand.setName('조회').setDescription('누적 후원금액을 조회합니다.')
+        .addUserOption((option) => option.setName('유저').setDescription('조회할 유저').setRequired(true)))
+      .addSubcommand((subcommand) => subcommand.setName('추가').setDescription('후원금액을 추가합니다.')
+        .addUserOption((option) => option.setName('유저').setDescription('대상 유저').setRequired(true))
+        .addIntegerOption((option) => option.setName('금액').setDescription('추가할 금액(원)').setMinValue(1).setRequired(true)))
+      .addSubcommand((subcommand) => subcommand.setName('감소').setDescription('후원금액을 감소합니다.')
+        .addUserOption((option) => option.setName('유저').setDescription('대상 유저').setRequired(true))
+        .addIntegerOption((option) => option.setName('금액').setDescription('감소할 금액(원)').setMinValue(1).setRequired(true)))
+  ).catch(console.error);
+});
+
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand() || interaction.commandName !== '후원금액') return;
+  if (interaction.user.id !== ADMIN_USER_ID) {
+    await interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+  if (!db) return interaction.reply({ content: 'DATABASE_URL이 설정되지 않았습니다.', flags: MessageFlags.Ephemeral });
+  const target = interaction.options.getUser('유저');
+  const action = interaction.options.getSubcommand();
+  try {
+    if (action === '조회') {
+      const { rows } = await db.query('SELECT donation_amount FROM user_subscriptions WHERE user_id = $1', [target.id]);
+      const amount = Number(rows[0]?.donation_amount || 0);
+      await interaction.reply({ content: `${target}님의 누적 후원금액은 **${amount.toLocaleString('ko-KR')}원**입니다.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const delta = interaction.options.getInteger('금액') * (action === '감소' ? -1 : 1);
+    const { rows } = await db.query(`
+      INSERT INTO user_subscriptions (user_id, tier, donation_amount, created_at, updated_at)
+      VALUES ($1, 'free', GREATEST($2, 0), NOW(), NOW())
+      ON CONFLICT (user_id) DO UPDATE SET donation_amount = GREATEST(user_subscriptions.donation_amount + $3, 0), updated_at = NOW()
+      RETURNING donation_amount`, [target.id, Math.max(delta, 0), delta]);
+    const amount = Number(rows[0].donation_amount);
+    const tier = amount >= 5000 ? 'premium' : amount >= 3000 ? 'basic' : 'free';
+    await db.query('UPDATE user_subscriptions SET tier = $1, updated_at = NOW() WHERE user_id = $2', [tier, target.id]);
+    if (interaction.guild) {
+      const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+      const role = member && interaction.guild.roles.cache.get(ROLE_IDS[tier]);
+      if (member && role) {
+        await member.roles.remove(Object.values(ROLE_IDS).filter((roleId) => roleId !== role.id));
+        await member.roles.add(role);
+      }
+    }
+    await interaction.reply({ content: `${target}님의 후원금액을 ${action === '추가' ? '추가' : '감소'}했습니다.\n- 누적 금액: **${amount.toLocaleString('ko-KR')}원**\n- 적용 등급: **${tier.toUpperCase()}**`, flags: MessageFlags.Ephemeral });
+  } catch (error) {
+    console.error('Donation amount command error:', error);
+    await interaction.reply({ content: '후원금액 처리 중 오류가 발생했습니다.', flags: MessageFlags.Ephemeral }).catch(() => {});
   }
 });
 
