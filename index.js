@@ -93,7 +93,18 @@ async function publishRankingChannel(guild, channel) {
     const member = members.get(row.user_id);
     return `${index + 1}. ${member ? member : `<@${row.user_id}>`} — ${Number(row.amount).toLocaleString('ko-KR')}원`;
   });
-  await channel.send({ content: `🏆 **후원금액 랭킹 TOP 10**\n\n${lines.join('\n') || '등록된 후원자가 없습니다.'}` });
+  const content = `🏆 **후원금액 랭킹 TOP 10**\n\n${lines.join('\n') || '등록된 후원자가 없습니다.'}`;
+  const existing = await db.query('SELECT message_id FROM donation_ranking_channels WHERE guild_id = $1', [guild.id]);
+  let message = existing.rows[0]?.message_id
+    ? await channel.messages.fetch(existing.rows[0].message_id).catch(() => null)
+    : null;
+  if (message) await message.edit(content);
+  else message = await channel.send(content);
+  await db.query(`
+    INSERT INTO donation_ranking_channels (guild_id, channel_id, message_id)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (guild_id) DO UPDATE SET channel_id = EXCLUDED.channel_id, message_id = EXCLUDED.message_id
+  `, [guild.id, channel.id, message.id]);
   return channel;
 }
 
@@ -137,6 +148,7 @@ client.on('interactionCreate', async (interaction) => {
 client.once('clientReady', async () => {
   if (db) {
     await db.query('ALTER TABLE user_subscriptions ADD COLUMN IF NOT EXISTS donation_amount INTEGER NOT NULL DEFAULT 0').catch(console.error);
+    await db.query('CREATE TABLE IF NOT EXISTS donation_ranking_channels (guild_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, message_id TEXT NOT NULL)').catch(console.error);
   }
   await client.application.commands.create(
     new SlashCommandBuilder()
@@ -151,6 +163,15 @@ client.once('clientReady', async () => {
         .addUserOption((option) => option.setName('유저').setDescription('대상 유저').setRequired(true))
         .addIntegerOption((option) => option.setName('금액').setDescription('감소할 금액(원)').setMinValue(1).setRequired(true)))
   ).catch(console.error);
+  setInterval(async () => {
+    if (!db) return;
+    const { rows } = await db.query('SELECT guild_id, channel_id FROM donation_ranking_channels').catch(() => ({ rows: [] }));
+    for (const row of rows) {
+      const guild = client.guilds.cache.get(row.guild_id);
+      const channel = guild?.channels.cache.get(row.channel_id);
+      if (guild && channel) await publishRankingChannel(guild, channel).catch(console.error);
+    }
+  }, 15000);
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -186,6 +207,9 @@ client.on('interactionCreate', async (interaction) => {
         await member.roles.add(role);
       }
     }
+    const rankingConfig = await db.query('SELECT channel_id FROM donation_ranking_channels WHERE guild_id = $1', [interaction.guildId]);
+    const rankingChannel = interaction.guild?.channels.cache.get(rankingConfig.rows[0]?.channel_id);
+    if (rankingChannel) await publishRankingChannel(interaction.guild, rankingChannel);
     await interaction.reply({ content: `${target}님의 후원금액을 ${action === '추가' ? '추가' : '감소'}했습니다.\n- 누적 금액: **${amount.toLocaleString('ko-KR')}원**\n- 적용 등급: **${tier.toUpperCase()}**`, flags: MessageFlags.Ephemeral });
   } catch (error) {
     console.error('Donation amount command error:', error);
