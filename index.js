@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, SlashCommandBuilder, MessageFlags } = require('discord.js');
 const pg = require('pg');
 require('dotenv').config({ path: '.env' });
 
@@ -15,8 +15,13 @@ const ROLE_IDS = {
   premium: '1525464472360063096',
 };
 const ADMIN_USER_ID = '1269575955626725390';
-const db = process.env.DATABASE_URL
-  ? new pg.Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } })
+const databaseUrl = process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL) : null;
+if (databaseUrl) {
+  databaseUrl.searchParams.delete('sslmode');
+  databaseUrl.searchParams.delete('channel_binding');
+}
+const db = databaseUrl
+  ? new pg.Pool({ connectionString: databaseUrl.toString(), ssl: { rejectUnauthorized: false } })
   : null;
 
 async function getTier(userId) {
@@ -68,7 +73,7 @@ async function publishRankingChannel(guild) {
   return channel;
 }
 
-client.once('ready', () => {
+client.once('clientReady', () => {
   console.log(`Logged in as ${client.user.tag}`);
   client.application.commands.set([
     new SlashCommandBuilder().setName('등급역할').setDescription('모든 유저의 등급에 맞춰 역할을 부여합니다.'),
@@ -80,11 +85,11 @@ client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   if (!['등급역할', '랭킹체널'].includes(interaction.commandName)) return;
   if (interaction.user.id !== ADMIN_USER_ID) {
-    await interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', ephemeral: true });
+    await interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', flags: MessageFlags.Ephemeral });
     return;
   }
-  if (!interaction.guild) return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', ephemeral: true });
-  await interaction.deferReply({ ephemeral: true });
+  if (!interaction.guild) return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   try {
     if (interaction.commandName === '등급역할') {
       const updated = await syncGuildRoles(interaction.guild);
