@@ -34,20 +34,41 @@ async function getTier(userId) {
 
 async function syncGuildRoles(guild) {
   await guild.members.fetch();
+  const botMember = guild.members.me;
+  const missingRoles = Object.entries(ROLE_IDS)
+    .filter(([, roleId]) => !guild.roles.cache.has(roleId))
+    .map(([tier, roleId]) => `${tier}(${roleId})`);
+  if (!botMember?.permissions.has('ManageRoles')) {
+    throw new Error('봇에 Manage Roles 권한이 없습니다.');
+  }
+  if (missingRoles.length) {
+    throw new Error(`서버에서 역할을 찾을 수 없습니다: ${missingRoles.join(', ')}`);
+  }
+
   let updated = 0;
+  let failed = 0;
+  const failures = [];
   for (const member of guild.members.cache.values()) {
     if (member.user.bot) continue;
     const tier = await getTier(member.id);
     const wantedRole = guild.roles.cache.get(ROLE_IDS[tier]);
     if (!wantedRole) continue;
-    const tierRoles = Object.values(ROLE_IDS).filter((id) => id !== wantedRole.id);
-    await member.roles.remove(tierRoles).catch(() => {});
-    if (!member.roles.cache.has(wantedRole.id)) {
-      await member.roles.add(wantedRole).catch(() => {});
-      updated += 1;
+    if (wantedRole.position >= botMember.roles.highest.position) {
+      throw new Error(`봇 역할보다 높은 위치에 있는 역할입니다: ${tier} (${wantedRole.name})`);
+    }
+    try {
+      const tierRoles = Object.values(ROLE_IDS).filter((id) => id !== wantedRole.id);
+      await member.roles.remove(tierRoles);
+      if (!member.roles.cache.has(wantedRole.id)) {
+        await member.roles.add(wantedRole);
+        updated += 1;
+      }
+    } catch (error) {
+      failed += 1;
+      failures.push(`${member.user.tag}: ${error.message}`);
     }
   }
-  return updated;
+  return { updated, failed, failures };
 }
 
 async function publishRankingChannel(guild) {
@@ -92,8 +113,12 @@ client.on('interactionCreate', async (interaction) => {
   await interaction.deferReply({ flags: MessageFlags.Ephemeral });
   try {
     if (interaction.commandName === '등급역할') {
-      const updated = await syncGuildRoles(interaction.guild);
-      await interaction.editReply(`등급 역할 동기화가 완료되었습니다. 새로 부여한 역할: ${updated}명`);
+      const result = await syncGuildRoles(interaction.guild);
+      const failureText = result.failures.slice(0, 3).join('\n');
+      await interaction.editReply(
+        `등급 역할 동기화가 완료되었습니다. 새로 부여한 역할: ${result.updated}명` +
+        (result.failed ? `\n실패: ${result.failed}명\n${failureText}` : '')
+      );
     } else {
       const channel = await publishRankingChannel(interaction.guild);
       await interaction.editReply(`${channel} 채널에 랭킹을 갱신했습니다.`);
