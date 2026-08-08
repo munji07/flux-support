@@ -87,7 +87,7 @@ async function publishRankingChannel(guild, channel) {
     throw new Error('user_subscriptions에 후원액 컬럼이 없습니다. donation_amount 컬럼을 추가해 주세요.');
   }
 
-  const members = await guild.members.fetch();
+  const members = guild.members.cache;
   const { rows } = await db.query(`SELECT user_id, ${amountColumn} AS amount FROM user_subscriptions WHERE ${amountColumn} > 0 ORDER BY ${amountColumn} DESC LIMIT 10`);
   const lines = rows.map((row, index) => {
     const member = members.get(row.user_id);
