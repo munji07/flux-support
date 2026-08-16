@@ -146,6 +146,32 @@ const guildCommands = [
         .addUserOption((option) => option.setName('유저').setDescription('대상 유저').setRequired(true))
         .addIntegerOption((option) => option.setName('금액').setDescription('감소할 금액(원)').setMinValue(1).setRequired(true))
     ),
+  new SlashCommandBuilder()
+    .setName('경고')
+    .setDescription('유저에게 경고를 추가하거나 감소합니다.')
+    .addUserOption((option) => option.setName('유저').setDescription('대상 유저').setRequired(true))
+    .addStringOption((option) =>
+      option
+        .setName('작업')
+        .setDescription('추가 또는 감소')
+        .addChoices(
+          { name: '추가', value: '추가' },
+          { name: '감소', value: '감소' }
+        )
+        .setRequired(true)
+    )
+    .addStringOption((option) => option.setName('사유').setDescription('경고 사유').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('추방')
+    .setDescription('유저를 서버에서 추방합니다.')
+    .addUserOption((option) => option.setName('유저').setDescription('대상 유저').setRequired(true))
+    .addStringOption((option) => option.setName('사유').setDescription('추방 사유').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('타임아웃')
+    .setDescription('유저에게 타임아웃을 부여합니다.')
+    .addUserOption((option) => option.setName('유저').setDescription('대상 유저').setRequired(true))
+    .addIntegerOption((option) => option.setName('시간').setDescription('타임아웃 시간(분)').setMinValue(1).setRequired(true))
+    .addStringOption((option) => option.setName('이유').setDescription('타임아웃 이유').setRequired(true)),
 ].map((command) => command.toJSON());
 
 async function main() {

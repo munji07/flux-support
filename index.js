@@ -10,6 +10,7 @@ const client = new Client({
 });
 
 const ADMIN_USER_ID = '1269575955626725390';
+const MODERATOR_ROLE_ID = '1538529402256760884';
 const LEVEL_GUILD_ID = '1538513625730383902';
 const channelConfigPath = path.join(__dirname, 'channel-config.json');
 const sqlitePath = path.join(__dirname, 'progress.db');
@@ -132,6 +133,29 @@ function errorEmbed(title, description) {
   return makeEmbed(title, description, 0xed4245);
 }
 
+function hasModeratorRole(member) {
+  return member?.roles?.cache?.has(MODERATOR_ROLE_ID);
+}
+
+async function getWarningCount(guildId, userId) {
+  const row = dbGet('SELECT count FROM warnings WHERE guild_id = ? AND user_id = ?', [guildId, userId]);
+  return Number(row?.count || 0);
+}
+
+async function updateWarning(guildId, userId, delta, reason) {
+  const current = dbGet('SELECT count, reasons FROM warnings WHERE guild_id = ? AND user_id = ?', [guildId, userId]);
+  const nextCount = Math.max(0, Number(current?.count || 0) + delta);
+  const reasons = current ? JSON.parse(current.reasons || '[]') : [];
+  if (delta > 0) reasons.push({ reason, at: Date.now() });
+  dbRun(
+    `INSERT INTO warnings (guild_id, user_id, count, reasons, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT (guild_id, user_id) DO UPDATE SET count = excluded.count, reasons = excluded.reasons, updated_at = excluded.updated_at`,
+    [guildId, userId, nextCount, JSON.stringify(reasons.slice(-20)), Date.now()]
+  );
+  return nextCount;
+}
+
 async function initSqlite() {
   await runSql(`
     CREATE TABLE IF NOT EXISTS level_settings (
@@ -152,6 +176,16 @@ async function initSqlite() {
       key TEXT NOT NULL,
       value TEXT NOT NULL,
       PRIMARY KEY (guild_id, key)
+    )
+  `);
+  await runSql(`
+    CREATE TABLE IF NOT EXISTS warnings (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0,
+      reasons TEXT NOT NULL DEFAULT '[]',
+      updated_at INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (guild_id, user_id)
     )
   `);
   const userProgressColumns = sqlite.prepare(`PRAGMA table_info(user_progress)`).all().map((row) => row.name);
@@ -801,6 +835,56 @@ client.on('interactionCreate', async (interaction) => {
     const channel = interaction.options.getChannel('채널');
     await publishRankingChannel(interaction.guild, channel);
     return interaction.reply({ content: `${channel} 채널에 랭킹 게시를 설정했습니다.`, flags: MessageFlags.Ephemeral });
+  }
+
+  if (interaction.commandName === '경고' || interaction.commandName === '추방' || interaction.commandName === '타임아웃') {
+    if (!interaction.guild) return interaction.reply({ embeds: [errorEmbed('사용 불가', '서버에서만 사용할 수 있습니다.')], flags: MessageFlags.Ephemeral });
+    if (!hasModeratorRole(interaction.member)) {
+      return interaction.reply({ embeds: [errorEmbed('권한 부족', '이 명령어는 지정한 역할을 가진 유저만 사용할 수 있습니다.')], flags: MessageFlags.Ephemeral });
+    }
+  }
+
+  if (interaction.commandName === '경고') {
+    const target = interaction.options.getUser('유저');
+    const action = interaction.options.getString('작업');
+    const reason = interaction.options.getString('사유');
+    const delta = action === '추가' ? 1 : -1;
+    const nextCount = await updateWarning(interaction.guildId, target.id, delta, reason);
+    return interaction.reply({
+      embeds: [successEmbed('경고 처리', `${target}의 경고를 ${action === '추가' ? '추가' : '감소'}했습니다.\n**현재 경고 수**: ${nextCount}\n**사유**: ${reason}`)],
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  if (interaction.commandName === '추방') {
+    const target = interaction.options.getUser('유저');
+    const reason = interaction.options.getString('사유');
+    const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+    if (!member) {
+      return interaction.reply({ embeds: [errorEmbed('대상 없음', '대상 유저를 서버에서 찾을 수 없습니다.')], flags: MessageFlags.Ephemeral });
+    }
+    const botMember = interaction.guild.members.me ?? await interaction.guild.members.fetchMe().catch(() => null);
+    if (!botMember?.permissions.has(PermissionsBitField.Flags.KickMembers)) {
+      return interaction.reply({ embeds: [errorEmbed('권한 부족', '봇에 Kick Members 권한이 없습니다.')], flags: MessageFlags.Ephemeral });
+    }
+    await member.kick(reason);
+    return interaction.reply({ embeds: [successEmbed('추방 완료', `${target} 를 추방했습니다.\n**사유**: ${reason}`)], flags: MessageFlags.Ephemeral });
+  }
+
+  if (interaction.commandName === '타임아웃') {
+    const target = interaction.options.getUser('유저');
+    const minutes = interaction.options.getInteger('시간');
+    const reason = interaction.options.getString('이유');
+    const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+    if (!member) {
+      return interaction.reply({ embeds: [errorEmbed('대상 없음', '대상 유저를 서버에서 찾을 수 없습니다.')], flags: MessageFlags.Ephemeral });
+    }
+    const botMember = interaction.guild.members.me ?? await interaction.guild.members.fetchMe().catch(() => null);
+    if (!botMember?.permissions.has(PermissionsBitField.Flags.ModerateMembers)) {
+      return interaction.reply({ embeds: [errorEmbed('권한 부족', '봇에 Moderate Members 권한이 없습니다.')], flags: MessageFlags.Ephemeral });
+    }
+    await member.timeout(minutes * 60 * 1000, reason);
+    return interaction.reply({ embeds: [successEmbed('타임아웃 완료', `${target} 에게 ${minutes}분 타임아웃을 적용했습니다.\n**사유**: ${reason}`)], flags: MessageFlags.Ephemeral });
   }
 
   if (interaction.commandName !== '후원금액') return;
