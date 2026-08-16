@@ -58,6 +58,18 @@ function saveChannelConfig(config) {
   fs.writeFileSync(channelConfigPath, JSON.stringify(config, null, 2));
 }
 
+function makeEmbed(title, description, color = 0x5865f2) {
+  return new EmbedBuilder().setColor(color).setTitle(title).setDescription(description);
+}
+
+function successEmbed(title, description) {
+  return makeEmbed(title, description, 0x57f287);
+}
+
+function errorEmbed(title, description) {
+  return makeEmbed(title, description, 0xed4245);
+}
+
 async function initSqlite() {
   await runSql(`
     CREATE TABLE IF NOT EXISTS level_settings (
@@ -350,7 +362,12 @@ client.on('interactionCreate', async (interaction) => {
       const user = await getPlayer(interaction.guildId, interaction.user.id);
       const next = getXpRequirement(settings, user.level);
       return interaction.reply({
-        content: `현재 레벨: **${user.level}**\n경험치: **${user.xp}/${next}**\n코인: **${user.coins}**\n메시지 수: **${user.messages}**`,
+        embeds: [
+          successEmbed(
+            '레벨 정보',
+            `**레벨**: ${user.level}\n**경험치**: ${user.xp}/${next}\n**코인**: ${user.coins}\n**메시지 수**: ${user.messages}`
+          ),
+        ],
         flags: MessageFlags.Ephemeral,
       });
     }
@@ -366,12 +383,12 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       try {
         const result = await syncLevelSystem(interaction.guild);
-        await interaction.editReply(
-          `레벨 시스템 동기화 완료\n- 초기화된 DB 행: ${result.initialized}개\n- 닉네임 갱신: ${result.updatedNicknames}명`
-        );
+        await interaction.editReply({
+          embeds: [successEmbed('레벨 시스템 동기화 완료', `**초기화된 DB 행**: ${result.initialized}개\n**닉네임 갱신**: ${result.updatedNicknames}명`)],
+        });
       } catch (error) {
         console.error('Level sync error:', error);
-        await interaction.editReply('레벨 시스템 동기화 중 오류가 발생했습니다.');
+        await interaction.editReply({ embeds: [errorEmbed('오류', '레벨 시스템 동기화 중 오류가 발생했습니다.')] });
       }
     }
     return;
@@ -382,60 +399,60 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: '이 명령어는 지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     }
     const user = await getPlayer(interaction.guildId, interaction.user.id);
-    return interaction.reply({ content: `보유 코인: **${user.coins}**`, flags: MessageFlags.Ephemeral });
+    return interaction.reply({ embeds: [successEmbed('코인 보유량', `**${user.coins} 코인**`)], flags: MessageFlags.Ephemeral });
   }
 
   if (interaction.commandName === '별명변경') {
     if (interaction.guildId !== LEVEL_GUILD_ID) {
-      return interaction.reply({ content: '이 명령어는 지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ embeds: [errorEmbed('사용 불가', '이 명령어는 지정된 서버에서만 사용할 수 있습니다.')], flags: MessageFlags.Ephemeral });
     }
     const nickname = interaction.options.getString('별명');
     const member = interaction.member;
     const botMember = interaction.guild.members.me ?? await interaction.guild.members.fetchMe().catch(() => null);
     if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageNicknames)) {
-      return interaction.reply({ content: '봇에 닉네임 변경 권한이 없습니다.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ embeds: [errorEmbed('권한 부족', '봇에 닉네임 변경 권한이 없습니다.')], flags: MessageFlags.Ephemeral });
     }
 
     const settings = await getLevelSettings(interaction.guildId);
     const user = await getPlayer(interaction.guildId, interaction.user.id);
     const now = Date.now();
     if (now - user.last_nickname_change_at < 30 * 60 * 1000) {
-      return interaction.reply({ content: '별명은 30분에 한 번만 변경할 수 있습니다.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ embeds: [errorEmbed('쿨다운', '별명은 30분에 한 번만 변경할 수 있습니다.')], flags: MessageFlags.Ephemeral });
     }
 
     const desired = settings.nickname_prefix ? buildPrefixedNickname(user.level, nickname) : nickname.slice(0, 32);
     user.last_nickname_change_at = now;
     await savePlayer(interaction.guildId, interaction.user.id, user);
     await member.setNickname(desired).catch(() => {});
-    return interaction.reply({ content: `서버 별명을 ${desired} 로 변경했습니다.`, flags: MessageFlags.Ephemeral });
+    return interaction.reply({ embeds: [successEmbed('별명 변경', `**${desired}** 로 변경했습니다.`)], flags: MessageFlags.Ephemeral });
   }
 
   if (interaction.commandName === '별명설정') {
     if (interaction.user.id !== ADMIN_USER_ID) {
-      return interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ embeds: [errorEmbed('권한 부족', '관리자만 사용할 수 있는 명령어입니다.')], flags: MessageFlags.Ephemeral });
     }
     if (interaction.guildId !== LEVEL_GUILD_ID) {
-      return interaction.reply({ content: '이 명령어는 지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ embeds: [errorEmbed('사용 불가', '이 명령어는 지정된 서버에서만 사용할 수 있습니다.')], flags: MessageFlags.Ephemeral });
     }
 
     const target = interaction.options.getUser('유저');
     const nickname = interaction.options.getString('별명');
     const botMember = interaction.guild.members.me ?? await interaction.guild.members.fetchMe().catch(() => null);
     if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageNicknames)) {
-      return interaction.reply({ content: '봇에 닉네임 변경 권한이 없습니다.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ embeds: [errorEmbed('권한 부족', '봇에 닉네임 변경 권한이 없습니다.')], flags: MessageFlags.Ephemeral });
     }
 
     const settings = await getLevelSettings(interaction.guildId);
     const user = await getPlayer(interaction.guildId, target.id);
     const member = await interaction.guild.members.fetch(target.id).catch(() => null);
     if (!member) {
-      return interaction.reply({ content: '대상 유저를 서버에서 찾을 수 없습니다.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ embeds: [errorEmbed('대상 없음', '대상 유저를 서버에서 찾을 수 없습니다.')], flags: MessageFlags.Ephemeral });
     }
 
     const desired = settings.nickname_prefix ? buildPrefixedNickname(user.level, nickname) : nickname.slice(0, 32);
     await savePlayer(interaction.guildId, target.id, user);
     await member.setNickname(desired).catch(() => {});
-    return interaction.reply({ content: `${target}의 서버 별명을 ${desired} 로 설정했습니다.`, flags: MessageFlags.Ephemeral });
+    return interaction.reply({ embeds: [successEmbed('별명 설정', `${target}의 서버 별명을 **${desired}** 로 설정했습니다.`)], flags: MessageFlags.Ephemeral });
   }
 
   if (interaction.commandName === '미니게임') {
