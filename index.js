@@ -3,6 +3,7 @@ const pg = require('pg');
 const Database = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
+const { handleSupportInteraction } = require('./support.js');
 require('dotenv').config({ path: '.env' });
 
 const client = new Client({
@@ -12,6 +13,7 @@ const client = new Client({
 const ADMIN_USER_ID = '1269575955626725390';
 const MODERATOR_ROLE_ID = '1538529402256760884';
 const LEVEL_GUILD_ID = '1538513625730383902';
+const SUPPORT_GUILD_ID = '1525458537139146812';
 const channelConfigPath = path.join(__dirname, 'channel-config.json');
 const sqlitePath = path.join(__dirname, 'progress.db');
 
@@ -589,6 +591,8 @@ client.on('interactionCreate', async (interaction) => {
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
+  if (await handleSupportInteraction(interaction, db)) return;
+
   if (interaction.commandName === 'arcade') {
     if (interaction.guildId !== LEVEL_GUILD_ID) {
       return interaction.reply({ content: '이 명령어는 지정된 서버에서만 사용할 수 있어요.', flags: MessageFlags.Ephemeral });
@@ -902,6 +906,7 @@ client.on('interactionCreate', async (interaction) => {
   }
 
   if (interaction.commandName === '랭킹채널') {
+    if (interaction.guildId !== SUPPORT_GUILD_ID) return interaction.reply({ content: '지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     if (interaction.user.id !== ADMIN_USER_ID) return interaction.reply({ content: '관리자만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     if (!interaction.guild) return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     const channel = interaction.options.getChannel('채널');
@@ -960,6 +965,7 @@ client.on('interactionCreate', async (interaction) => {
   }
 
   if (interaction.commandName !== '후원금액') return;
+  if (interaction.guildId !== SUPPORT_GUILD_ID) return interaction.reply({ content: '지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
   if (interaction.user.id !== ADMIN_USER_ID) return interaction.reply({ content: '관리자만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
   if (!db) return interaction.reply({ content: 'DATABASE_URL이 설정되어 있지 않습니다.', flags: MessageFlags.Ephemeral });
 

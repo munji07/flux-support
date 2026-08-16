@@ -179,16 +179,31 @@ const guildCommands = [
     .addStringOption((option) => option.setName('이유').setDescription('타임아웃 이유').setRequired(true)),
 ].map((command) => command.toJSON());
 
+const supportCommandNames = new Set(['랭킹채널', '후원금액']);
+const supportCommands = guildCommands.filter((command) => supportCommandNames.has(command.name));
+const communityCommands = [
+  ...globalCommands,
+  ...guildCommands.filter((command) => !supportCommandNames.has(command.name)),
+];
+
 async function main() {
   if (!process.env.DISCORD_TOKEN) throw new Error('DISCORD_TOKEN이 설정되어 있지 않습니다.');
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   const application = await rest.get(Routes.oauth2CurrentApplication());
-  await rest.put(Routes.applicationCommands(application.id), { body: globalCommands });
-  await rest.put(Routes.applicationGuildCommands(application.id, guildId), { body: guildCommands });
-  console.log('슬래시 커맨드 배포가 완료되었습니다.');
+  console.log('[1/3] 전역 커맨드 초기화 중...');
+  await rest.put(Routes.applicationCommands(application.id), { body: [] });
+  console.log(`[2/3] 친목서버(${guildId}) 커맨드 ${communityCommands.length}개 등록 중...`);
+  await rest.put(Routes.applicationGuildCommands(application.id, guildId), { body: communityCommands });
+  console.log('[3/3] 서포트 서버(1525458537139146812) 커맨드 등록 중...');
+  await rest.put(Routes.applicationGuildCommands(application.id, '1525458537139146812'), { body: supportCommands });
+  console.log(`서포트 서버 커맨드 ${supportCommands.length}개 등록 완료.`);
+  console.log('서버별 슬래시 커맨드 배포가 완료되었습니다.');
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
+
