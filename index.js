@@ -58,6 +58,68 @@ function saveChannelConfig(config) {
   fs.writeFileSync(channelConfigPath, JSON.stringify(config, null, 2));
 }
 
+function dbGet(sql, params = []) {
+  return sqlite.prepare(sql).get(params);
+}
+
+function dbAll(sql, params = []) {
+  return sqlite.prepare(sql).all(params);
+}
+
+function dbRun(sql, params = []) {
+  return sqlite.prepare(sql).run(params);
+}
+
+function readSetting(guildId, key) {
+  const row = dbGet('SELECT value FROM bot_settings WHERE guild_id = ? AND key = ?', [guildId, key]);
+  if (!row) return null;
+  try {
+    return JSON.parse(row.value);
+  } catch {
+    return row.value;
+  }
+}
+
+function writeSetting(guildId, key, value) {
+  dbRun(
+    `INSERT INTO bot_settings (guild_id, key, value)
+     VALUES (?, ?, ?)
+     ON CONFLICT (guild_id, key) DO UPDATE SET value = excluded.value`,
+    [guildId, key, JSON.stringify(value)]
+  );
+}
+
+function deleteSetting(guildId, key) {
+  dbRun('DELETE FROM bot_settings WHERE guild_id = ? AND key = ?', [guildId, key]);
+}
+
+function getEntryRoleIds(guildId) {
+  const value = readSetting(guildId, 'entry_role_ids');
+  return Array.isArray(value) ? value : [];
+}
+
+function setEntryRoleIds(guildId, roleIds) {
+  writeSetting(guildId, 'entry_role_ids', roleIds);
+}
+
+function getWelcomeChannelId(guildId) {
+  return readSetting(guildId, 'welcome_channel_id') || '';
+}
+
+function setWelcomeChannelId(guildId, channelId) {
+  if (channelId) writeSetting(guildId, 'welcome_channel_id', channelId);
+  else deleteSetting(guildId, 'welcome_channel_id');
+}
+
+function getGoodbyeChannelId(guildId) {
+  return readSetting(guildId, 'goodbye_channel_id') || '';
+}
+
+function setGoodbyeChannelId(guildId, channelId) {
+  if (channelId) writeSetting(guildId, 'goodbye_channel_id', channelId);
+  else deleteSetting(guildId, 'goodbye_channel_id');
+}
+
 function makeEmbed(title, description, color = 0x5865f2) {
   return new EmbedBuilder().setColor(color).setTitle(title).setDescription(description);
 }
@@ -84,6 +146,14 @@ async function initSqlite() {
       nickname_prefix INTEGER NOT NULL DEFAULT 1
     )
   `);
+  await runSql(`
+    CREATE TABLE IF NOT EXISTS bot_settings (
+      guild_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      PRIMARY KEY (guild_id, key)
+    )
+  `);
   const userProgressColumns = sqlite.prepare(`PRAGMA table_info(user_progress)`).all().map((row) => row.name);
   if (userProgressColumns.length) {
     if (!userProgressColumns.includes('last_nickname_change_at')) {
@@ -103,6 +173,17 @@ async function initSqlite() {
       PRIMARY KEY (guild_id, user_id)
     )
   `);
+
+  const legacy = loadChannelConfig();
+  if (legacy.global?.welcomeChannelId) {
+    setWelcomeChannelId(LEVEL_GUILD_ID, legacy.global.welcomeChannelId);
+  }
+  if (legacy.global?.goodbyeChannelId) {
+    setGoodbyeChannelId(LEVEL_GUILD_ID, legacy.global.goodbyeChannelId);
+  }
+  if (Array.isArray(legacy.global?.entryRoleIds) && legacy.global.entryRoleIds.length) {
+    setEntryRoleIds(LEVEL_GUILD_ID, legacy.global.entryRoleIds);
+  }
 }
 
 async function getLevelSettings(guildId) {
@@ -271,8 +352,7 @@ async function publishRankingChannel(guild, channel) {
 }
 
 async function assignEntryRoles(member) {
-  const config = loadChannelConfig();
-  const roleIds = [...new Set(config.global.entryRoleIds || [])];
+  const roleIds = [...new Set(getEntryRoleIds(member.guild.id))];
   if (!roleIds.length) return;
 
   const botMember = member.guild.members.me ?? await member.guild.members.fetchMe().catch(() => null);
@@ -301,8 +381,7 @@ async function assignEntryRoles(member) {
 }
 
 async function grantEntryRolesToGuild(guild) {
-  const config = loadChannelConfig();
-  const roleIds = [...new Set(config.global.entryRoleIds || [])];
+  const roleIds = [...new Set(getEntryRoleIds(guild.id))];
   if (!roleIds.length) {
     return { updated: 0, skipped: 0, missing: 0 };
   }
@@ -640,31 +719,27 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.user.id !== ADMIN_USER_ID) return interaction.reply({ content: '관리자만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     if (!interaction.guild) return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     const subcommand = interaction.options.getSubcommand();
-    const config = loadChannelConfig();
     if (subcommand === '설정') {
       const channel = interaction.options.getChannel('채널');
-      config.global.welcomeChannelId = channel.id;
-      saveChannelConfig(config);
+      setWelcomeChannelId(interaction.guildId, channel.id);
       return interaction.reply({ content: `입장 로깅 채널을 ${channel} 로 설정했습니다.`, flags: MessageFlags.Ephemeral });
     }
     if (subcommand === '제거') {
-      config.global.welcomeChannelId = '';
-      saveChannelConfig(config);
+      setWelcomeChannelId(interaction.guildId, '');
       return interaction.reply({ content: '입장 로깅 채널을 제거했습니다.', flags: MessageFlags.Ephemeral });
     }
-    return interaction.reply({ content: config.global.welcomeChannelId ? `현재 입장 로깅 채널: <#${config.global.welcomeChannelId}>` : '설정되어 있지 않습니다.', flags: MessageFlags.Ephemeral });
+    const channelId = getWelcomeChannelId(interaction.guildId);
+    return interaction.reply({ content: channelId ? `현재 입장 로깅 채널: <#${channelId}>` : '설정되어 있지 않습니다.', flags: MessageFlags.Ephemeral });
   }
 
   if (interaction.commandName === '입장역할') {
     if (interaction.user.id !== ADMIN_USER_ID) return interaction.reply({ content: '관리자만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     if (!interaction.guild) return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     const subcommand = interaction.options.getSubcommand();
-    const config = loadChannelConfig();
-    config.global.entryRoleIds ??= [];
     if (subcommand === '추가') {
       const role = interaction.options.getRole('역할');
-      if (!config.global.entryRoleIds.includes(role.id)) config.global.entryRoleIds.push(role.id);
-      saveChannelConfig(config);
+      const current = getEntryRoleIds(interaction.guildId);
+      if (!current.includes(role.id)) setEntryRoleIds(interaction.guildId, [...current, role.id]);
       return interaction.reply({
         embeds: [successEmbed('입장 역할 추가', `${role} 를 입장 역할에 추가했습니다.`)],
         flags: MessageFlags.Ephemeral,
@@ -672,8 +747,7 @@ client.on('interactionCreate', async (interaction) => {
     }
     if (subcommand === '제거') {
       const role = interaction.options.getRole('역할');
-      config.global.entryRoleIds = config.global.entryRoleIds.filter((roleId) => roleId !== role.id);
-      saveChannelConfig(config);
+      setEntryRoleIds(interaction.guildId, getEntryRoleIds(interaction.guildId).filter((roleId) => roleId !== role.id));
       return interaction.reply({
         embeds: [successEmbed('입장 역할 제거', `${role} 를 입장 역할에서 제거했습니다.`)],
         flags: MessageFlags.Ephemeral,
@@ -697,7 +771,7 @@ client.on('interactionCreate', async (interaction) => {
       }
       return;
     }
-    const names = config.global.entryRoleIds.map((roleId) => interaction.guild.roles.cache.get(roleId)).filter(Boolean).map((r) => r.toString());
+    const names = getEntryRoleIds(interaction.guildId).map((roleId) => interaction.guild.roles.cache.get(roleId)).filter(Boolean).map((r) => r.toString());
     return interaction.reply({
       embeds: [successEmbed('입장 역할 목록', names.length ? `- ${names.join('\n- ')}` : '설정되어 있지 않습니다.')],
       flags: MessageFlags.Ephemeral,
@@ -708,19 +782,17 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.user.id !== ADMIN_USER_ID) return interaction.reply({ content: '관리자만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     if (!interaction.guild) return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     const subcommand = interaction.options.getSubcommand();
-    const config = loadChannelConfig();
     if (subcommand === '설정') {
       const channel = interaction.options.getChannel('채널');
-      config.global.goodbyeChannelId = channel.id;
-      saveChannelConfig(config);
+      setGoodbyeChannelId(interaction.guildId, channel.id);
       return interaction.reply({ content: `퇴장 로깅 채널을 ${channel} 로 설정했습니다.`, flags: MessageFlags.Ephemeral });
     }
     if (subcommand === '제거') {
-      config.global.goodbyeChannelId = '';
-      saveChannelConfig(config);
+      setGoodbyeChannelId(interaction.guildId, '');
       return interaction.reply({ content: '퇴장 로깅 채널을 제거했습니다.', flags: MessageFlags.Ephemeral });
     }
-    return interaction.reply({ content: config.global.goodbyeChannelId ? `현재 퇴장 로깅 채널: <#${config.global.goodbyeChannelId}>` : '설정되어 있지 않습니다.', flags: MessageFlags.Ephemeral });
+    const channelId = getGoodbyeChannelId(interaction.guildId);
+    return interaction.reply({ content: channelId ? `현재 퇴장 로깅 채널: <#${channelId}>` : '설정되어 있지 않습니다.', flags: MessageFlags.Ephemeral });
   }
 
   if (interaction.commandName === '랭킹채널') {
@@ -767,8 +839,7 @@ client.on('interactionCreate', async (interaction) => {
 
 client.on('guildMemberAdd', async (member) => {
   await assignEntryRoles(member);
-  const config = loadChannelConfig();
-  const channel = member.guild.channels.cache.get(config.global.welcomeChannelId);
+  const channel = member.guild.channels.cache.get(getWelcomeChannelId(member.guild.id));
   if (!channel) return;
 
   const now = Date.now();
@@ -788,8 +859,7 @@ client.on('guildMemberAdd', async (member) => {
 });
 
 client.on('guildMemberRemove', async (member) => {
-  const config = loadChannelConfig();
-  const channel = member.guild.channels.cache.get(config.global.goodbyeChannelId);
+  const channel = member.guild.channels.cache.get(getGoodbyeChannelId(member.guild.id));
   if (!channel) return;
 
   const embed = new EmbedBuilder()

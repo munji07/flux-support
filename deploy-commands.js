@@ -32,7 +32,7 @@ const globalCommands = [
         .setDescription('입장 역할을 제거합니다.')
         .addRoleOption((option) => option.setName('역할').setDescription('제거할 역할').setRequired(true))
     )
-    .addSubcommand((subcommand) => subcommand.setName('지급').setDescription('입장 역할이 없는 모든 멤버에게 지급합니다.'))
+    .addSubcommand((subcommand) => subcommand.setName('지급').setDescription('입장 역할이 없는 기존 멤버에게 일괄 지급합니다.'))
     .addSubcommand((subcommand) => subcommand.setName('조회').setDescription('현재 입장 역할 목록을 조회합니다.')),
   new SlashCommandBuilder()
     .setName('퇴장채널')
@@ -62,27 +62,12 @@ const guildCommands = [
   new SlashCommandBuilder()
     .setName('별명변경')
     .setDescription('서버 별명을 변경합니다.')
-    .addStringOption((option) =>
-      option
-        .setName('별명')
-        .setDescription('새 서버 별명')
-        .setRequired(true)
-    ),
+    .addStringOption((option) => option.setName('별명').setDescription('새 서버 별명').setRequired(true)),
   new SlashCommandBuilder()
     .setName('별명설정')
     .setDescription('관리자가 유저의 서버 별명을 설정합니다.')
-    .addUserOption((option) =>
-      option
-        .setName('유저')
-        .setDescription('대상 유저')
-        .setRequired(true)
-    )
-    .addStringOption((option) =>
-      option
-        .setName('별명')
-        .setDescription('설정할 서버 별명')
-        .setRequired(true)
-    ),
+    .addUserOption((option) => option.setName('유저').setDescription('대상 유저').setRequired(true))
+    .addStringOption((option) => option.setName('별명').setDescription('설정할 서버 별명').setRequired(true)),
   new SlashCommandBuilder()
     .setName('미니게임')
     .setDescription('코인을 사용해 미니게임을 플레이합니다.')
