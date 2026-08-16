@@ -1,6 +1,7 @@
 {
   "global": {
-    "welcomeChannelId": ""
+    "welcomeChannelId": "",
+    "entryRoleIds": []
   },
   "guilds": {}
 }

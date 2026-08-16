@@ -7,22 +7,32 @@ const globalCommands = [
   new SlashCommandBuilder()
     .setName('입장채널')
     .setDescription('입장 로깅 채널을 전역으로 설정합니다.')
-    .addChannelOption((option) =>
-      option
-        .setName('채널')
-        .setDescription('입장 메시지를 보낼 텍스트 채널')
-        .addChannelTypes(ChannelType.GuildText)
-        .setRequired(true)
-    ),
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('설정')
+        .setDescription('입장 로깅 채널을 설정합니다.')
+        .addChannelOption((option) =>
+          option.setName('채널').setDescription('입장 메시지를 보낼 텍스트 채널').addChannelTypes(ChannelType.GuildText).setRequired(true)
+        )
+    )
+    .addSubcommand((subcommand) => subcommand.setName('제거').setDescription('입장 로깅 채널을 제거합니다.'))
+    .addSubcommand((subcommand) => subcommand.setName('조회').setDescription('입장 로깅 채널을 조회합니다.')),
   new SlashCommandBuilder()
-    .setName('기본역할')
-    .setDescription('새로 들어오는 유저에게 지급할 기본 역할을 설정합니다.')
-    .addRoleOption((option) =>
-      option
-        .setName('역할')
-        .setDescription('자동으로 지급할 역할')
-        .setRequired(true)
-    ),
+    .setName('입장역할')
+    .setDescription('새 멤버에게 지급할 역할을 관리합니다.')
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('추가')
+        .setDescription('입장 역할을 추가합니다.')
+        .addRoleOption((option) => option.setName('역할').setDescription('자동으로 지급할 역할').setRequired(true))
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('제거')
+        .setDescription('입장 역할을 제거합니다.')
+        .addRoleOption((option) => option.setName('역할').setDescription('제거할 역할').setRequired(true))
+    )
+    .addSubcommand((subcommand) => subcommand.setName('조회').setDescription('현재 입장 역할 목록을 조회합니다.')),
 ].map((command) => command.toJSON());
 
 const guildCommands = [
@@ -32,13 +42,16 @@ const guildCommands = [
   new SlashCommandBuilder()
     .setName('퇴장채널')
     .setDescription('퇴장 로깅 채널을 설정합니다.')
-    .addChannelOption((option) =>
-      option
-        .setName('채널')
-        .setDescription('퇴장 메시지를 보낼 텍스트 채널')
-        .addChannelTypes(ChannelType.GuildText)
-        .setRequired(true)
-    ),
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('설정')
+        .setDescription('퇴장 로깅 채널을 설정합니다.')
+        .addChannelOption((option) =>
+          option.setName('채널').setDescription('퇴장 메시지를 보낼 텍스트 채널').addChannelTypes(ChannelType.GuildText).setRequired(true)
+        )
+    )
+    .addSubcommand((subcommand) => subcommand.setName('제거').setDescription('퇴장 로깅 채널을 제거합니다.'))
+    .addSubcommand((subcommand) => subcommand.setName('조회').setDescription('퇴장 로깅 채널을 조회합니다.')),
   new SlashCommandBuilder()
     .setName('랭킹채널')
     .setDescription('선택한 채널에 후원금액 랭킹을 게시합니다.')

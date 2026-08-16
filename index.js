@@ -29,9 +29,14 @@ const db = databaseUrl
 
 function loadChannelConfig() {
   try {
-    return JSON.parse(fs.readFileSync(channelConfigPath, 'utf8'));
+    const config = JSON.parse(fs.readFileSync(channelConfigPath, 'utf8'));
+    config.global ??= {};
+    config.global.welcomeChannelId ??= '';
+    config.global.entryRoleIds ??= [];
+    config.guilds ??= {};
+    return config;
   } catch {
-    return { global: { welcomeChannelId: '', defaultRoleId: '' }, guilds: {} };
+    return { global: { welcomeChannelId: '', entryRoleIds: [] }, guilds: {} };
   }
 }
 
@@ -139,17 +144,22 @@ async function publishRankingChannel(guild, channel) {
   return channel;
 }
 
-async function assignDefaultRole(member) {
+async function assignEntryRoles(member) {
   const config = loadChannelConfig();
-  const defaultRoleId = config.global.defaultRoleId;
-  if (!defaultRoleId) return;
+  const roleIds = [...new Set(config.global.entryRoleIds || [])];
+  if (!roleIds.length) return;
 
-  const role = member.guild.roles.cache.get(defaultRoleId);
   const botMember = member.guild.members.me;
-  if (!role || !botMember?.permissions.has('ManageRoles')) return;
-  if (role.position >= botMember.roles.highest.position) return;
+  if (!botMember?.permissions.has('ManageRoles')) return;
 
-  await member.roles.add(role).catch(console.error);
+  const assignableRoles = roleIds
+    .map((roleId) => member.guild.roles.cache.get(roleId))
+    .filter(Boolean)
+    .filter((role) => role.position < botMember.roles.highest.position);
+
+  for (const role of assignableRoles) {
+    await member.roles.add(role).catch(console.error);
+  }
 }
 
 client.once('clientReady', async () => {
@@ -207,15 +217,33 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.user.id !== ADMIN_USER_ID) {
       return interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', flags: MessageFlags.Ephemeral });
     }
+    if (!interaction.guild) {
+      return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    }
 
-    const channel = interaction.options.getChannel('채널');
+    const subcommand = interaction.options.getSubcommand();
     const config = loadChannelConfig();
-    config.global.welcomeChannelId = channel.id;
-    saveChannelConfig(config);
-    return interaction.reply({ content: `입장 로깅 채널을 ${channel} 로 설정했습니다.`, flags: MessageFlags.Ephemeral });
+
+    if (subcommand === '설정') {
+      const channel = interaction.options.getChannel('채널');
+      config.global.welcomeChannelId = channel.id;
+      saveChannelConfig(config);
+      return interaction.reply({ content: `입장 로깅 채널을 ${channel} 로 설정했습니다.`, flags: MessageFlags.Ephemeral });
+    }
+
+    if (subcommand === '제거') {
+      config.global.welcomeChannelId = '';
+      saveChannelConfig(config);
+      return interaction.reply({ content: '입장 로깅 채널을 제거했습니다.', flags: MessageFlags.Ephemeral });
+    }
+
+    return interaction.reply({
+      content: config.global.welcomeChannelId ? `현재 입장 로깅 채널: <#${config.global.welcomeChannelId}>` : '입장 로깅 채널이 설정되어 있지 않습니다.',
+      flags: MessageFlags.Ephemeral,
+    });
   }
 
-  if (interaction.commandName === '기본역할') {
+  if (interaction.commandName === '입장역할') {
     if (interaction.user.id !== ADMIN_USER_ID) {
       return interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', flags: MessageFlags.Ephemeral });
     }
@@ -223,11 +251,34 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     }
 
+    const subcommand = interaction.options.getSubcommand();
     const role = interaction.options.getRole('역할');
     const config = loadChannelConfig();
-    config.global.defaultRoleId = role.id;
-    saveChannelConfig(config);
-    return interaction.reply({ content: `기본 역할을 ${role} 로 설정했습니다.`, flags: MessageFlags.Ephemeral });
+    config.global.entryRoleIds ??= [];
+
+    if (subcommand === '추가') {
+      if (!config.global.entryRoleIds.includes(role.id)) {
+        config.global.entryRoleIds.push(role.id);
+        saveChannelConfig(config);
+      }
+      return interaction.reply({ content: `입장 역할에 ${role} 를 추가했습니다.`, flags: MessageFlags.Ephemeral });
+    }
+
+    if (subcommand === '제거') {
+      config.global.entryRoleIds = config.global.entryRoleIds.filter((roleId) => roleId !== role.id);
+      saveChannelConfig(config);
+      return interaction.reply({ content: `입장 역할에서 ${role} 를 제거했습니다.`, flags: MessageFlags.Ephemeral });
+    }
+
+    const names = config.global.entryRoleIds
+      .map((roleId) => interaction.guild.roles.cache.get(roleId))
+      .filter(Boolean)
+      .map((entryRole) => entryRole.toString());
+
+    return interaction.reply({
+      content: names.length ? `입장 역할 목록:\n- ${names.join('\n- ')}` : '입장 역할이 설정되어 있지 않습니다.',
+      flags: MessageFlags.Ephemeral,
+    });
   }
 
   if (interaction.commandName === '랭킹채널' || interaction.commandName === '퇴장채널') {
@@ -238,20 +289,29 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     }
 
-    const channel = interaction.options.getChannel('채널');
-    if (interaction.commandName === '랭킹채널') {
-      if (!db) {
-        return interaction.reply({ content: 'DATABASE_URL이 설정되어 있지 않습니다.', flags: MessageFlags.Ephemeral });
-      }
-      await publishRankingChannel(interaction.guild, channel);
-      return interaction.reply({ content: `${channel} 채널에 랭킹 게시를 설정했습니다.`, flags: MessageFlags.Ephemeral });
-    }
-
+    const subcommand = interaction.options.getSubcommand();
+    const channelKey = interaction.commandName === '랭킹채널' ? 'donationRankingChannelId' : 'goodbyeChannelId';
     const config = loadChannelConfig();
     config.guilds[interaction.guildId] ??= {};
-    config.guilds[interaction.guildId].goodbyeChannelId = channel.id;
-    saveChannelConfig(config);
-    return interaction.reply({ content: `퇴장 로깅 채널을 ${channel} 로 설정했습니다.`, flags: MessageFlags.Ephemeral });
+
+    if (subcommand === '설정') {
+      const channel = interaction.options.getChannel('채널');
+      config.guilds[interaction.guildId][channelKey] = channel.id;
+      saveChannelConfig(config);
+      return interaction.reply({ content: `${interaction.commandName}을 ${channel} 로 설정했습니다.`, flags: MessageFlags.Ephemeral });
+    }
+
+    if (subcommand === '제거') {
+      config.guilds[interaction.guildId][channelKey] = '';
+      saveChannelConfig(config);
+      return interaction.reply({ content: `${interaction.commandName}을 제거했습니다.`, flags: MessageFlags.Ephemeral });
+    }
+
+    const channelId = config.guilds[interaction.guildId][channelKey];
+    return interaction.reply({
+      content: channelId ? `현재 설정: <#${channelId}>` : '설정되어 있지 않습니다.',
+      flags: MessageFlags.Ephemeral,
+    });
   }
 
   if (interaction.commandName !== '후원금액') return;
@@ -316,11 +376,11 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.on('guildMemberAdd', async (member) => {
+  await assignEntryRoles(member);
+
   const config = loadChannelConfig();
   const channel = member.guild.channels.cache.get(config.global.welcomeChannelId);
   if (!channel) return;
-
-  await assignDefaultRole(member);
 
   const now = Date.now();
   const embed = new EmbedBuilder()
