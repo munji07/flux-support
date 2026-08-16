@@ -523,6 +523,7 @@ client.on('messageCreate', async (message) => {
 });
 
 const ARCADE_BET = 5;
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function arcadePanel(user, coins, title = '🎰 FLUX 도파민 아케이드') {
   return {
@@ -550,6 +551,17 @@ client.on('interactionCreate', async (interaction) => {
     return interaction.reply({ embeds: [errorEmbed('💸 코인이 부족해요', `최소 **${ARCADE_BET} 코인**이 필요합니다. 메시지를 보내 코인을 모아보세요!`)], flags: MessageFlags.Ephemeral });
   }
 
+  await interaction.deferUpdate();
+  const animationFrames = game === 'slots'
+    ? ['🎰 | ❔ | ❔ | ❔ |', '🎰 | 🍒 | ❔ | ❔ |', '🎰 | 🍒 | 🔔 | ❔ |', '🎰 | 🍒 | 🔔 | 💎 |']
+    : game === 'dice'
+      ? ['🎲 주사위를 굴리는 중…', '🎲 ⚪ ⚪ ⚪', '🎲 ⚫ ⚪ ⚪', '🎲 ⚫ ⚫ ⚪']
+      : ['🪙 코인을 튕기는 중…', '🪙 앞…', '🪙 뒤…', '🪙 빙글빙글…'];
+  for (const frame of animationFrames) {
+    await interaction.editReply(arcadePanel(interaction.user, user.coins, `✨ ${frame}`));
+    await wait(280);
+  }
+
   user.coins -= ARCADE_BET;
   let result;
   let reward = 0;
@@ -571,7 +583,7 @@ client.on('interactionCreate', async (interaction) => {
   }
   user.coins += reward;
   await savePlayer(interaction.guildId, interaction.user.id, user);
-  await interaction.update(arcadePanel(interaction.user, user.coins, `✨ ${game === 'slots' ? '슬롯 결과' : game === 'dice' ? '주사위 결과' : '앞뒤 결과'}\n\n${result}`));
+  await interaction.editReply(arcadePanel(interaction.user, user.coins, `✨ ${game === 'slots' ? '슬롯 결과' : game === 'dice' ? '주사위 결과' : '코인 러시 결과'}\n\n${result}`));
 });
 
 client.on('interactionCreate', async (interaction) => {
