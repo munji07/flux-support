@@ -32,11 +32,12 @@ function loadChannelConfig() {
     const config = JSON.parse(fs.readFileSync(channelConfigPath, 'utf8'));
     config.global ??= {};
     config.global.welcomeChannelId ??= '';
+    config.global.goodbyeChannelId ??= '';
     config.global.entryRoleIds ??= [];
     config.guilds ??= {};
     return config;
   } catch {
-    return { global: { welcomeChannelId: '', entryRoleIds: [] }, guilds: {} };
+    return { global: { welcomeChannelId: '', goodbyeChannelId: '', entryRoleIds: [] }, guilds: {} };
   }
 }
 
@@ -149,7 +150,7 @@ async function assignEntryRoles(member) {
   const roleIds = [...new Set(config.global.entryRoleIds || [])];
   if (!roleIds.length) return;
 
-  const botMember = member.guild.members.me;
+  const botMember = member.guild.members.me ?? await member.guild.members.fetchMe().catch(() => null);
   if (!botMember?.permissions.has('ManageRoles')) return;
 
   const assignableRoles = roleIds
@@ -290,9 +291,9 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     const subcommand = interaction.options.getSubcommand();
-    const channelKey = interaction.commandName === '랭킹채널' ? 'donationRankingChannelId' : 'goodbyeChannelId';
     const config = loadChannelConfig();
     config.guilds[interaction.guildId] ??= {};
+    const channelKey = interaction.commandName === '랭킹채널' ? 'donationRankingChannelId' : 'goodbyeChannelId';
 
     if (subcommand === '설정') {
       const channel = interaction.options.getChannel('채널');
@@ -416,7 +417,7 @@ client.on('guildMemberAdd', async (member) => {
 
 client.on('guildMemberRemove', async (member) => {
   const config = loadChannelConfig();
-  const channel = member.guild.channels.cache.get(config.guilds[member.guild.id]?.goodbyeChannelId);
+  const channel = member.guild.channels.cache.get(config.global.goodbyeChannelId);
   if (!channel) return;
 
   const embed = new EmbedBuilder()

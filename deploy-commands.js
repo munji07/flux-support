@@ -33,15 +33,9 @@ const globalCommands = [
         .addRoleOption((option) => option.setName('역할').setDescription('제거할 역할').setRequired(true))
     )
     .addSubcommand((subcommand) => subcommand.setName('조회').setDescription('현재 입장 역할 목록을 조회합니다.')),
-].map((command) => command.toJSON());
-
-const guildCommands = [
-  new SlashCommandBuilder()
-    .setName('등급역할')
-    .setDescription('모든 유저의 등급에 맞춰 역할을 부여합니다.'),
   new SlashCommandBuilder()
     .setName('퇴장채널')
-    .setDescription('퇴장 로깅 채널을 설정합니다.')
+    .setDescription('퇴장 로깅 채널을 관리합니다.')
     .addSubcommand((subcommand) =>
       subcommand
         .setName('설정')
@@ -52,6 +46,12 @@ const guildCommands = [
     )
     .addSubcommand((subcommand) => subcommand.setName('제거').setDescription('퇴장 로깅 채널을 제거합니다.'))
     .addSubcommand((subcommand) => subcommand.setName('조회').setDescription('퇴장 로깅 채널을 조회합니다.')),
+].map((command) => command.toJSON());
+
+const guildCommands = [
+  new SlashCommandBuilder()
+    .setName('등급역할')
+    .setDescription('모든 유저의 등급에 맞춰 역할을 부여합니다.'),
   new SlashCommandBuilder()
     .setName('랭킹채널')
     .setDescription('선택한 채널에 후원금액 랭킹을 게시합니다.')
