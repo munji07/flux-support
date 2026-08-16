@@ -300,6 +300,49 @@ async function assignEntryRoles(member) {
   }
 }
 
+async function grantEntryRolesToGuild(guild) {
+  const config = loadChannelConfig();
+  const roleIds = [...new Set(config.global.entryRoleIds || [])];
+  if (!roleIds.length) {
+    return { updated: 0, skipped: 0, missing: 0 };
+  }
+
+  await guild.members.fetch();
+  const botMember = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
+  if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
+    throw new Error('봇에 Manage Roles 권한이 없습니다.');
+  }
+
+  let updated = 0;
+  let skipped = 0;
+  let missing = 0;
+
+  for (const member of guild.members.cache.values()) {
+    if (member.user.bot) continue;
+
+    const freshMember = await guild.members.fetch(member.id).catch(() => member);
+    for (const roleId of roleIds) {
+      const role = guild.roles.cache.get(roleId) ?? await guild.roles.fetch(roleId).catch(() => null);
+      if (!role) {
+        missing += 1;
+        continue;
+      }
+      if (role.position >= botMember.roles.highest.position) continue;
+      if (freshMember.roles.cache.has(role.id)) {
+        skipped += 1;
+        continue;
+      }
+      await freshMember.roles.add(role).then(() => {
+        updated += 1;
+      }).catch(() => {
+        skipped += 1;
+      });
+    }
+  }
+
+  return { updated, skipped, missing };
+}
+
 function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
 }
@@ -635,6 +678,24 @@ client.on('interactionCreate', async (interaction) => {
         embeds: [successEmbed('입장 역할 제거', `${role} 를 입장 역할에서 제거했습니다.`)],
         flags: MessageFlags.Ephemeral,
       });
+    }
+    if (subcommand === '지급') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      try {
+        const result = await grantEntryRolesToGuild(interaction.guild);
+        await interaction.editReply({
+          embeds: [
+            successEmbed(
+              '입장 역할 일괄 지급',
+              `**지급 완료**: ${result.updated}회\n**이미 보유/실패**: ${result.skipped}회\n**누락 역할**: ${result.missing}회`
+            ),
+          ],
+        });
+      } catch (error) {
+        console.error('Entry role grant error:', error);
+        await interaction.editReply({ embeds: [errorEmbed('오류', '입장 역할 일괄 지급 중 오류가 발생했습니다.')] });
+      }
+      return;
     }
     const names = config.global.entryRoleIds.map((roleId) => interaction.guild.roles.cache.get(roleId)).filter(Boolean).map((r) => r.toString());
     return interaction.reply({

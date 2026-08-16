@@ -32,6 +32,7 @@ const globalCommands = [
         .setDescription('입장 역할을 제거합니다.')
         .addRoleOption((option) => option.setName('역할').setDescription('제거할 역할').setRequired(true))
     )
+    .addSubcommand((subcommand) => subcommand.setName('지급').setDescription('입장 역할이 없는 모든 멤버에게 지급합니다.'))
     .addSubcommand((subcommand) => subcommand.setName('조회').setDescription('현재 입장 역할 목록을 조회합니다.')),
   new SlashCommandBuilder()
     .setName('퇴장채널')
