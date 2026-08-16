@@ -84,6 +84,12 @@ async function initSqlite() {
       nickname_prefix INTEGER NOT NULL DEFAULT 1
     )
   `);
+  const userProgressColumns = sqlite.prepare(`PRAGMA table_info(user_progress)`).all().map((row) => row.name);
+  if (userProgressColumns.length) {
+    if (!userProgressColumns.includes('last_nickname_change_at')) {
+      await runSql(`ALTER TABLE user_progress ADD COLUMN last_nickname_change_at INTEGER NOT NULL DEFAULT 0`);
+    }
+  }
   await runSql(`
     CREATE TABLE IF NOT EXISTS user_progress (
       guild_id TEXT NOT NULL,
@@ -270,15 +276,27 @@ async function assignEntryRoles(member) {
   if (!roleIds.length) return;
 
   const botMember = member.guild.members.me ?? await member.guild.members.fetchMe().catch(() => null);
-  if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageRoles)) return;
+  if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
+    console.warn(`[entry-role] missing ManageRoles in guild ${member.guild.id}`);
+    return;
+  }
 
-  const assignableRoles = roleIds
-    .map((roleId) => member.guild.roles.cache.get(roleId))
-    .filter(Boolean)
-    .filter((role) => role.position < botMember.roles.highest.position);
+  const freshMember = await member.guild.members.fetch(member.id).catch(() => member);
 
-  for (const role of assignableRoles) {
-    await member.roles.add(role).catch(() => {});
+  for (const roleId of roleIds) {
+    const role = member.guild.roles.cache.get(roleId) ?? await member.guild.roles.fetch(roleId).catch(() => null);
+    if (!role) {
+      console.warn(`[entry-role] role not found: ${roleId} in guild ${member.guild.id}`);
+      continue;
+    }
+    if (role.position >= botMember.roles.highest.position) {
+      console.warn(`[entry-role] role too high: ${roleId} in guild ${member.guild.id}`);
+      continue;
+    }
+    if (freshMember.roles.cache.has(role.id)) continue;
+    await freshMember.roles.add(role).catch((error) => {
+      console.warn(`[entry-role] failed to add role ${roleId} to ${member.id}: ${error.message}`);
+    });
   }
 }
 
@@ -604,16 +622,25 @@ client.on('interactionCreate', async (interaction) => {
       const role = interaction.options.getRole('역할');
       if (!config.global.entryRoleIds.includes(role.id)) config.global.entryRoleIds.push(role.id);
       saveChannelConfig(config);
-      return interaction.reply({ content: `${role} 를 입장 역할에 추가했습니다.`, flags: MessageFlags.Ephemeral });
+      return interaction.reply({
+        embeds: [successEmbed('입장 역할 추가', `${role} 를 입장 역할에 추가했습니다.`)],
+        flags: MessageFlags.Ephemeral,
+      });
     }
     if (subcommand === '제거') {
       const role = interaction.options.getRole('역할');
       config.global.entryRoleIds = config.global.entryRoleIds.filter((roleId) => roleId !== role.id);
       saveChannelConfig(config);
-      return interaction.reply({ content: `${role} 를 입장 역할에서 제거했습니다.`, flags: MessageFlags.Ephemeral });
+      return interaction.reply({
+        embeds: [successEmbed('입장 역할 제거', `${role} 를 입장 역할에서 제거했습니다.`)],
+        flags: MessageFlags.Ephemeral,
+      });
     }
     const names = config.global.entryRoleIds.map((roleId) => interaction.guild.roles.cache.get(roleId)).filter(Boolean).map((r) => r.toString());
-    return interaction.reply({ content: names.length ? `입장 역할 목록:\n- ${names.join('\n- ')}` : '설정되어 있지 않습니다.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({
+      embeds: [successEmbed('입장 역할 목록', names.length ? `- ${names.join('\n- ')}` : '설정되어 있지 않습니다.')],
+      flags: MessageFlags.Ephemeral,
+    });
   }
 
   if (interaction.commandName === '퇴장채널') {
