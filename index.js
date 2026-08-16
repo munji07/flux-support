@@ -1,21 +1,18 @@
-const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, MessageFlags } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, MessageFlags, PermissionsBitField } = require('discord.js');
 const pg = require('pg');
+const sqlite3 = require('sqlite3').verbose();
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config({ path: '.env' });
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-const ROLE_IDS = {
-  free: '1525464470967812096',
-  basic: '1525464471579922533',
-  premium: '1525464472360063096',
-};
-
 const ADMIN_USER_ID = '1269575955626725390';
+const LEVEL_GUILD_ID = '1538513625730383902';
 const channelConfigPath = path.join(__dirname, 'channel-config.json');
+const sqlitePath = path.join(__dirname, 'progress.db');
 
 const databaseUrl = process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL) : null;
 if (databaseUrl) {
@@ -26,6 +23,35 @@ if (databaseUrl) {
 const db = databaseUrl
   ? new pg.Pool({ connectionString: databaseUrl.toString(), ssl: { rejectUnauthorized: false } })
   : null;
+
+const sqlite = new sqlite3.Database(sqlitePath);
+
+function runSql(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    sqlite.run(sql, params, function (error) {
+      if (error) reject(error);
+      else resolve(this);
+    });
+  });
+}
+
+function getSql(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    sqlite.get(sql, params, (error, row) => {
+      if (error) reject(error);
+      else resolve(row);
+    });
+  });
+}
+
+function allSql(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    sqlite.all(sql, params, (error, rows) => {
+      if (error) reject(error);
+      else resolve(rows);
+    });
+  });
+}
 
 function loadChannelConfig() {
   try {
@@ -45,26 +71,125 @@ function saveChannelConfig(config) {
   fs.writeFileSync(channelConfigPath, JSON.stringify(config, null, 2));
 }
 
+async function initSqlite() {
+  await runSql(`
+    CREATE TABLE IF NOT EXISTS level_settings (
+      guild_id TEXT PRIMARY KEY,
+      xp_base INTEGER NOT NULL DEFAULT 20,
+      xp_multiplier REAL NOT NULL DEFAULT 1.18,
+      xp_exponent REAL NOT NULL DEFAULT 1.9,
+      xp_gain_min INTEGER NOT NULL DEFAULT 4,
+      xp_gain_max INTEGER NOT NULL DEFAULT 14,
+      coin_per_xp REAL NOT NULL DEFAULT 0.75,
+      message_cooldown_ms INTEGER NOT NULL DEFAULT 6000,
+      nickname_prefix INTEGER NOT NULL DEFAULT 1
+    )
+  `);
+  await runSql(`
+    CREATE TABLE IF NOT EXISTS user_progress (
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      xp INTEGER NOT NULL DEFAULT 0,
+      coins INTEGER NOT NULL DEFAULT 0,
+      level INTEGER NOT NULL DEFAULT 1,
+      messages INTEGER NOT NULL DEFAULT 0,
+      last_message_at INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (guild_id, user_id)
+    )
+  `);
+}
+
+async function getLevelSettings(guildId) {
+  const defaults = {
+    xp_base: 20,
+    xp_multiplier: 1.18,
+    xp_exponent: 1.9,
+    xp_gain_min: 4,
+    xp_gain_max: 14,
+    coin_per_xp: 0.75,
+    message_cooldown_ms: 6000,
+    nickname_prefix: 1,
+  };
+  const row = await getSql('SELECT * FROM level_settings WHERE guild_id = ?', [guildId]);
+  return row || defaults;
+}
+
+async function ensureUserProgress(guildId, userId) {
+  await runSql(
+    `INSERT OR IGNORE INTO user_progress (guild_id, user_id) VALUES (?, ?)`,
+    [guildId, userId]
+  );
+  return getSql('SELECT * FROM user_progress WHERE guild_id = ? AND user_id = ?', [guildId, userId]);
+}
+
+function getXpRequirement(settings, level) {
+  const scaled = settings.xp_base * Math.pow(level, settings.xp_exponent) * Math.pow(settings.xp_multiplier, level - 1);
+  return Math.max(settings.xp_base, Math.floor(scaled));
+}
+
+function normalizeNicknamePrefix(nickname, level) {
+  const base = nickname ? nickname.replace(/^\[LV\.\d+\]\s*/u, '') : '';
+  return `[LV.${level}] ${base || ''}`.trim();
+}
+
+async function applyLevelNickname(member, level, settings) {
+  if (!settings.nickname_prefix) return;
+  const botMember = member.guild.members.me ?? await member.guild.members.fetchMe().catch(() => null);
+  if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageNicknames)) return;
+  const nickname = normalizeNicknamePrefix(member.nickname || member.user.username, level);
+  await member.setNickname(nickname).catch(() => {});
+}
+
+async function awardMessageProgress(member, contentLength) {
+  if (member.guild.id !== LEVEL_GUILD_ID) return null;
+  if (member.user.bot) return null;
+
+  const settings = await getLevelSettings(member.guild.id);
+  const now = Date.now();
+  const user = await ensureUserProgress(member.guild.id, member.id);
+  if (now - user.last_message_at < settings.message_cooldown_ms) return null;
+
+  const xpGain = Math.max(settings.xp_gain_min, Math.min(settings.xp_gain_max, Math.floor(contentLength / 18) + 3));
+  const coinGain = Math.max(1, Math.floor(xpGain * settings.coin_per_xp));
+
+  user.last_message_at = now;
+  user.messages += 1;
+  user.xp += xpGain;
+  user.coins += coinGain;
+
+  let leveledUp = false;
+  let nextRequirement = getXpRequirement(settings, user.level);
+  while (user.xp >= nextRequirement) {
+    user.xp -= nextRequirement;
+    user.level += 1;
+    leveledUp = true;
+    nextRequirement = getXpRequirement(settings, user.level);
+  }
+
+  await runSql(
+    `UPDATE user_progress
+     SET xp = ?, coins = ?, level = ?, messages = ?, last_message_at = ?
+     WHERE guild_id = ? AND user_id = ?`,
+    [user.xp, user.coins, user.level, user.messages, user.last_message_at, member.guild.id, member.id]
+  );
+
+  if (leveledUp) await applyLevelNickname(member, user.level, settings);
+  return { ...user, leveledUp, xpGain, coinGain, nextRequirement };
+}
+
 async function getTier(userId) {
   if (!db) return 'free';
   const { rows } = await db.query('SELECT tier, expires_at FROM user_subscriptions WHERE user_id = $1', [userId]);
   const row = rows[0];
   if (!row || (row.expires_at && new Date(row.expires_at) <= new Date())) return 'free';
-  return ROLE_IDS[row.tier] ? row.tier : 'free';
+  return row.tier;
 }
 
 async function syncGuildRoles(guild) {
   await guild.members.fetch();
-  const botMember = guild.members.me;
-  const missingRoles = Object.entries(ROLE_IDS)
-    .filter(([, roleId]) => !guild.roles.cache.has(roleId))
-    .map(([tier, roleId]) => `${tier}(${roleId})`);
-
-  if (!botMember?.permissions.has('ManageRoles')) {
+  const botMember = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
+  if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
     throw new Error('봇에 Manage Roles 권한이 없습니다.');
-  }
-  if (missingRoles.length) {
-    throw new Error(`서버에 역할이 없습니다: ${missingRoles.join(', ')}`);
   }
 
   let updated = 0;
@@ -73,17 +198,17 @@ async function syncGuildRoles(guild) {
 
   for (const member of guild.members.cache.values()) {
     if (member.user.bot) continue;
-
     const tier = await getTier(member.id);
-    const wantedRole = guild.roles.cache.get(ROLE_IDS[tier]);
+    const roleId = { free: '1525464470967812096', basic: '1525464471579922533', premium: '1525464472360063096' }[tier];
+    const wantedRole = guild.roles.cache.get(roleId);
     if (!wantedRole) continue;
 
     if (wantedRole.position >= botMember.roles.highest.position) {
-      throw new Error(`역할 ${tier}(${wantedRole.name}) 이 봇의 역할보다 높습니다.`);
+      throw new Error(`역할 ${wantedRole.name} 이 봇의 역할보다 높습니다.`);
     }
 
     try {
-      const tierRoles = Object.values(ROLE_IDS).filter((id) => id !== wantedRole.id);
+      const tierRoles = ['1525464470967812096', '1525464471579922533', '1525464472360063096'].filter((id) => id !== wantedRole.id);
       await member.roles.remove(tierRoles);
       if (!member.roles.cache.has(wantedRole.id)) {
         await member.roles.add(wantedRole);
@@ -99,9 +224,7 @@ async function syncGuildRoles(guild) {
 }
 
 async function publishRankingChannel(guild, channel) {
-  if (!channel || channel.type !== ChannelType.GuildText) {
-    throw new Error('텍스트 채널을 선택해 주세요.');
-  }
+  if (!channel || channel.type !== ChannelType.GuildText) throw new Error('텍스트 채널을 선택해 주세요.');
   if (!db) throw new Error('DATABASE_URL이 설정되어 있지 않습니다.');
 
   const { rows: columns } = await db.query(`
@@ -110,26 +233,16 @@ async function publishRankingChannel(guild, channel) {
       AND column_name IN ('donation_amount', 'total_donation', 'total_donation_amount')
   `);
   const amountColumn = columns[0]?.column_name;
-  if (!amountColumn) {
-    throw new Error('user_subscriptions 테이블에 금액 컬럼이 없습니다.');
-  }
+  if (!amountColumn) throw new Error('후원금액 컬럼이 없습니다.');
 
-  const members = guild.members.cache;
   const { rows } = await db.query(
     `SELECT user_id, ${amountColumn} AS amount FROM user_subscriptions WHERE ${amountColumn} > 0 ORDER BY ${amountColumn} DESC LIMIT 10`
   );
-
-  const lines = rows.map((row, index) => {
-    const member = members.get(row.user_id);
-    return `${index + 1}. ${member ?? `<@${row.user_id}>`} - ${Number(row.amount).toLocaleString('ko-KR')}원`;
-  });
-
+  const lines = rows.map((row, index) => `${index + 1}. <@${row.user_id}> - ${Number(row.amount).toLocaleString('ko-KR')}원`);
   const content = `**후원금액 랭킹 TOP 10**\n\n${lines.join('\n') || '등록된 후원자가 없습니다.'}`;
-  const existing = await db.query('SELECT message_id FROM donation_ranking_channels WHERE guild_id = $1', [guild.id]);
-  let message = existing.rows[0]?.message_id
-    ? await channel.messages.fetch(existing.rows[0].message_id).catch(() => null)
-    : null;
 
+  const existing = await db.query('SELECT message_id FROM donation_ranking_channels WHERE guild_id = $1', [guild.id]);
+  let message = existing.rows[0]?.message_id ? await channel.messages.fetch(existing.rows[0].message_id).catch(() => null) : null;
   if (message) await message.edit(content);
   else message = await channel.send(content);
 
@@ -141,8 +254,6 @@ async function publishRankingChannel(guild, channel) {
   `,
     [guild.id, channel.id, message.id]
   );
-
-  return channel;
 }
 
 async function assignEntryRoles(member) {
@@ -151,7 +262,7 @@ async function assignEntryRoles(member) {
   if (!roleIds.length) return;
 
   const botMember = member.guild.members.me ?? await member.guild.members.fetchMe().catch(() => null);
-  if (!botMember?.permissions.has('ManageRoles')) return;
+  if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageRoles)) return;
 
   const assignableRoles = roleIds
     .map((roleId) => member.guild.roles.cache.get(roleId))
@@ -159,170 +270,316 @@ async function assignEntryRoles(member) {
     .filter((role) => role.position < botMember.roles.highest.position);
 
   for (const role of assignableRoles) {
-    await member.roles.add(role).catch(console.error);
+    await member.roles.add(role).catch(() => {});
   }
+}
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
+async function getPlayer(guildId, userId) {
+  return ensureUserProgress(guildId, userId);
+}
+
+async function savePlayer(guildId, userId, patch) {
+  const current = await ensureUserProgress(guildId, userId);
+  const next = { ...current, ...patch };
+  await runSql(
+    `UPDATE user_progress
+     SET xp = ?, coins = ?, level = ?, messages = ?, last_message_at = ?
+     WHERE guild_id = ? AND user_id = ?`,
+    [next.xp, next.coins, next.level, next.messages, next.last_message_at, guildId, userId]
+  );
+  return next;
+}
+
+async function syncLevelSystem(guild) {
+  const settings = await getLevelSettings(guild.id);
+  await guild.members.fetch();
+  const botMember = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
+
+  let initialized = 0;
+  let updatedNicknames = 0;
+
+  for (const member of guild.members.cache.values()) {
+    if (member.user.bot) continue;
+
+    const before = await getSql('SELECT 1 FROM user_progress WHERE guild_id = ? AND user_id = ?', [guild.id, member.id]);
+    const user = await ensureUserProgress(guild.id, member.id);
+    if (!before) initialized += 1;
+
+    if (settings.nickname_prefix && botMember?.permissions.has(PermissionsBitField.Flags.ManageNicknames)) {
+      const desired = normalizeNicknamePrefix(member.nickname || member.user.username, user.level);
+      if ((member.nickname || member.user.username) !== desired) {
+        await member.setNickname(desired).catch(() => {});
+        updatedNicknames += 1;
+      }
+    }
+  }
+
+  return { initialized, updatedNicknames };
 }
 
 client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user.tag}`);
-  if (db) {
-    await db
-      .query('ALTER TABLE user_subscriptions ADD COLUMN IF NOT EXISTS donation_amount INTEGER NOT NULL DEFAULT 0')
-      .catch(console.error);
-    await db
-      .query(
-        'CREATE TABLE IF NOT EXISTS donation_ranking_channels (guild_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, message_id TEXT NOT NULL)'
-      )
-      .catch(console.error);
-  }
+  await initSqlite();
 
-  setInterval(async () => {
-    if (!db) return;
-    const { rows } = await db.query('SELECT guild_id, channel_id FROM donation_ranking_channels').catch(() => ({ rows: [] }));
-    for (const row of rows) {
-      const guild = client.guilds.cache.get(row.guild_id);
-      const channel = guild?.channels.cache.get(row.channel_id);
-      if (guild && channel) await publishRankingChannel(guild, channel).catch(console.error);
-    }
-  }, 15000);
+  if (db) {
+    await db.query('ALTER TABLE user_subscriptions ADD COLUMN IF NOT EXISTS donation_amount INTEGER NOT NULL DEFAULT 0').catch(console.error);
+    await db.query('CREATE TABLE IF NOT EXISTS donation_ranking_channels (guild_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, message_id TEXT NOT NULL)').catch(console.error);
+  }
+});
+
+client.on('messageCreate', async (message) => {
+  if (!message.guild || message.guild.id !== LEVEL_GUILD_ID) return;
+  if (!message.author || message.author.bot) return;
+  if (!message.content) return;
+  if (!message.member) return;
+
+  await awardMessageProgress(message.member, message.content.length).catch(console.error);
 });
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
+  if (interaction.commandName === '레벨') {
+    if (interaction.guildId !== LEVEL_GUILD_ID) {
+      return interaction.reply({ content: '이 명령어는 지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    }
+
+    const subcommand = interaction.options.getSubcommand();
+    if (subcommand === '조회') {
+      const settings = await getLevelSettings(interaction.guildId);
+      const user = await getPlayer(interaction.guildId, interaction.user.id);
+      const next = getXpRequirement(settings, user.level);
+      return interaction.reply({
+        content: `현재 레벨: **${user.level}**\n경험치: **${user.xp}/${next}**\n코인: **${user.coins}**\n메시지 수: **${user.messages}**`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    if (subcommand === '동기화') {
+      if (interaction.user.id !== ADMIN_USER_ID) {
+        return interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', flags: MessageFlags.Ephemeral });
+      }
+      if (!interaction.guild) {
+        return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+      }
+
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      try {
+        const result = await syncLevelSystem(interaction.guild);
+        await interaction.editReply(
+          `레벨 시스템 동기화 완료\n- 초기화된 DB 행: ${result.initialized}개\n- 닉네임 갱신: ${result.updatedNicknames}명`
+        );
+      } catch (error) {
+        console.error('Level sync error:', error);
+        await interaction.editReply('레벨 시스템 동기화 중 오류가 발생했습니다.');
+      }
+    }
+    return;
+  }
+
+  if (interaction.commandName === '코인') {
+    if (interaction.guildId !== LEVEL_GUILD_ID) {
+      return interaction.reply({ content: '이 명령어는 지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    }
+    const user = await getPlayer(interaction.guildId, interaction.user.id);
+    return interaction.reply({ content: `보유 코인: **${user.coins}**`, flags: MessageFlags.Ephemeral });
+  }
+
+  if (interaction.commandName === '미니게임') {
+    if (interaction.guildId !== LEVEL_GUILD_ID) {
+      return interaction.reply({ content: '이 명령어는 지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    }
+    const subcommand = interaction.options.getSubcommand();
+    const bet = interaction.options.getInteger('코인');
+    const user = await getPlayer(interaction.guildId, interaction.user.id);
+    const safeBet = clamp(bet, 1, Math.max(1, user.coins));
+
+    if (['슬롯', '복권'].includes(subcommand) && safeBet > user.coins) {
+      return interaction.reply({ content: '코인이 부족합니다.', flags: MessageFlags.Ephemeral });
+    }
+
+    if (subcommand === '슬롯') {
+      user.coins -= safeBet;
+      const pool = ['🍒', '🍋', '⭐', '7'];
+      const spins = [pool[Math.floor(Math.random() * pool.length)], pool[Math.floor(Math.random() * pool.length)], pool[Math.floor(Math.random() * pool.length)]];
+      const win = spins[0] === spins[1] && spins[1] === spins[2];
+      const reward = win ? safeBet * 3 : 0;
+      user.coins += reward;
+      await savePlayer(interaction.guildId, interaction.user.id, user);
+      return interaction.reply({
+        content: `| ${spins.join(' | ')} |\n${win ? `당첨! +${reward} 코인` : `실패! -${safeBet} 코인`}`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    if (subcommand === '복권') {
+      user.coins -= safeBet;
+      const ticket = String(Math.floor(Math.random() * 10)).padStart(4, '0');
+      const lucky = String(Math.floor(Math.random() * 10)).padStart(4, '0');
+      const win = ticket[3] === lucky[3];
+      const reward = win ? safeBet * 8 : 0;
+      user.coins += reward;
+      await savePlayer(interaction.guildId, interaction.user.id, user);
+      return interaction.reply({
+        content: `복권 번호: **${ticket}**\n당첨 번호: **${lucky}**\n${win ? `당첨! +${reward} 코인` : `꽝! -${safeBet} 코인`}`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    if (subcommand === '베팅') {
+      const choice = interaction.options.getString('선택');
+      const outcome = ['가위', '바위', '보'][Math.floor(Math.random() * 3)];
+      let result = '무승부';
+      if (choice === outcome) result = '무승부';
+      else if (
+        (choice === '가위' && outcome === '보') ||
+        (choice === '바위' && outcome === '가위') ||
+        (choice === '보' && outcome === '바위')
+      ) {
+        result = '승리';
+        user.coins += safeBet;
+      } else {
+        result = '패배';
+        user.coins -= safeBet;
+      }
+      await savePlayer(interaction.guildId, interaction.user.id, user);
+      return interaction.reply({
+        content: `당신: **${choice}**\n봇: **${outcome}**\n결과: **${result}**\n현재 코인: **${user.coins}**`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    if (subcommand === '가위바위보') {
+      return interaction.reply({
+        content: '가위바위보는 `/미니게임 베팅`으로 진행합니다.',
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
+  if (interaction.commandName === '경험치') {
+    if (interaction.user.id !== ADMIN_USER_ID) {
+      return interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', flags: MessageFlags.Ephemeral });
+    }
+    if (interaction.guildId !== LEVEL_GUILD_ID) {
+      return interaction.reply({ content: '이 명령어는 지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    }
+
+    const subcommand = interaction.options.getSubcommand();
+    if (subcommand === '설정') {
+      const target = interaction.options.getUser('유저');
+      const level = interaction.options.getInteger('레벨');
+      const xp = interaction.options.getInteger('경험치');
+      const coins = interaction.options.getInteger('코인');
+      const messages = interaction.options.getInteger('메시지');
+      const current = await getPlayer(interaction.guildId, target.id);
+      const next = {
+        ...current,
+        level: level ?? current.level,
+        xp: xp ?? current.xp,
+        coins: coins ?? current.coins,
+        messages: messages ?? current.messages,
+      };
+      await savePlayer(interaction.guildId, target.id, next);
+      return interaction.reply({
+        content: `${target}의 데이터를 저장했습니다.\n레벨: ${next.level}\n경험치: ${next.xp}\n코인: ${next.coins}\n메시지: ${next.messages}`,
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+  }
+
   if (interaction.commandName === '등급역할') {
     if (interaction.user.id !== ADMIN_USER_ID) {
       return interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', flags: MessageFlags.Ephemeral });
     }
-    if (!interaction.guild) {
-      return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
-    }
-
+    if (!interaction.guild) return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
     try {
       const result = await syncGuildRoles(interaction.guild);
       const failureText = result.failures.slice(0, 3).join('\n');
-      await interaction.editReply(
-        `등급 역할 동기화가 완료되었습니다.\n- 반영된 멤버: ${result.updated}명${
-          result.failed ? `\n- 실패: ${result.failed}명\n${failureText}` : ''
-        }`
-      );
+      await interaction.editReply(`등급 역할 동기화 완료\n- 반영: ${result.updated}명${result.failed ? `\n- 실패: ${result.failed}명\n${failureText}` : ''}`);
     } catch (error) {
-      console.error('Slash command error:', error);
-      await interaction.editReply('명령 실행 중 오류가 발생했습니다. 봇의 역할 권한과 DB 연결을 확인해 주세요.');
+      console.error(error);
+      await interaction.editReply('등급 역할 동기화 중 오류가 발생했습니다.');
     }
     return;
   }
 
   if (interaction.commandName === '입장채널') {
-    if (interaction.user.id !== ADMIN_USER_ID) {
-      return interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', flags: MessageFlags.Ephemeral });
-    }
-    if (!interaction.guild) {
-      return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
-    }
-
+    if (interaction.user.id !== ADMIN_USER_ID) return interaction.reply({ content: '관리자만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    if (!interaction.guild) return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     const subcommand = interaction.options.getSubcommand();
     const config = loadChannelConfig();
-
     if (subcommand === '설정') {
       const channel = interaction.options.getChannel('채널');
       config.global.welcomeChannelId = channel.id;
       saveChannelConfig(config);
       return interaction.reply({ content: `입장 로깅 채널을 ${channel} 로 설정했습니다.`, flags: MessageFlags.Ephemeral });
     }
-
     if (subcommand === '제거') {
       config.global.welcomeChannelId = '';
       saveChannelConfig(config);
       return interaction.reply({ content: '입장 로깅 채널을 제거했습니다.', flags: MessageFlags.Ephemeral });
     }
-
-    return interaction.reply({
-      content: config.global.welcomeChannelId ? `현재 입장 로깅 채널: <#${config.global.welcomeChannelId}>` : '입장 로깅 채널이 설정되어 있지 않습니다.',
-      flags: MessageFlags.Ephemeral,
-    });
+    return interaction.reply({ content: config.global.welcomeChannelId ? `현재 입장 로깅 채널: <#${config.global.welcomeChannelId}>` : '설정되어 있지 않습니다.', flags: MessageFlags.Ephemeral });
   }
 
   if (interaction.commandName === '입장역할') {
-    if (interaction.user.id !== ADMIN_USER_ID) {
-      return interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', flags: MessageFlags.Ephemeral });
-    }
-    if (!interaction.guild) {
-      return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
-    }
-
+    if (interaction.user.id !== ADMIN_USER_ID) return interaction.reply({ content: '관리자만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    if (!interaction.guild) return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     const subcommand = interaction.options.getSubcommand();
-    const role = interaction.options.getRole('역할');
     const config = loadChannelConfig();
     config.global.entryRoleIds ??= [];
-
     if (subcommand === '추가') {
-      if (!config.global.entryRoleIds.includes(role.id)) {
-        config.global.entryRoleIds.push(role.id);
-        saveChannelConfig(config);
-      }
-      return interaction.reply({ content: `입장 역할에 ${role} 를 추가했습니다.`, flags: MessageFlags.Ephemeral });
+      const role = interaction.options.getRole('역할');
+      if (!config.global.entryRoleIds.includes(role.id)) config.global.entryRoleIds.push(role.id);
+      saveChannelConfig(config);
+      return interaction.reply({ content: `${role} 를 입장 역할에 추가했습니다.`, flags: MessageFlags.Ephemeral });
     }
-
     if (subcommand === '제거') {
+      const role = interaction.options.getRole('역할');
       config.global.entryRoleIds = config.global.entryRoleIds.filter((roleId) => roleId !== role.id);
       saveChannelConfig(config);
-      return interaction.reply({ content: `입장 역할에서 ${role} 를 제거했습니다.`, flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: `${role} 를 입장 역할에서 제거했습니다.`, flags: MessageFlags.Ephemeral });
     }
-
-    const names = config.global.entryRoleIds
-      .map((roleId) => interaction.guild.roles.cache.get(roleId))
-      .filter(Boolean)
-      .map((entryRole) => entryRole.toString());
-
-    return interaction.reply({
-      content: names.length ? `입장 역할 목록:\n- ${names.join('\n- ')}` : '입장 역할이 설정되어 있지 않습니다.',
-      flags: MessageFlags.Ephemeral,
-    });
+    const names = config.global.entryRoleIds.map((roleId) => interaction.guild.roles.cache.get(roleId)).filter(Boolean).map((r) => r.toString());
+    return interaction.reply({ content: names.length ? `입장 역할 목록:\n- ${names.join('\n- ')}` : '설정되어 있지 않습니다.', flags: MessageFlags.Ephemeral });
   }
 
-  if (interaction.commandName === '랭킹채널' || interaction.commandName === '퇴장채널') {
-    if (interaction.user.id !== ADMIN_USER_ID) {
-      return interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', flags: MessageFlags.Ephemeral });
-    }
-    if (!interaction.guild) {
-      return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
-    }
-
+  if (interaction.commandName === '퇴장채널') {
+    if (interaction.user.id !== ADMIN_USER_ID) return interaction.reply({ content: '관리자만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    if (!interaction.guild) return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     const subcommand = interaction.options.getSubcommand();
     const config = loadChannelConfig();
-    config.guilds[interaction.guildId] ??= {};
-    const channelKey = interaction.commandName === '랭킹채널' ? 'donationRankingChannelId' : 'goodbyeChannelId';
-
     if (subcommand === '설정') {
       const channel = interaction.options.getChannel('채널');
-      config.guilds[interaction.guildId][channelKey] = channel.id;
+      config.global.goodbyeChannelId = channel.id;
       saveChannelConfig(config);
-      return interaction.reply({ content: `${interaction.commandName}을 ${channel} 로 설정했습니다.`, flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: `퇴장 로깅 채널을 ${channel} 로 설정했습니다.`, flags: MessageFlags.Ephemeral });
     }
-
     if (subcommand === '제거') {
-      config.guilds[interaction.guildId][channelKey] = '';
+      config.global.goodbyeChannelId = '';
       saveChannelConfig(config);
-      return interaction.reply({ content: `${interaction.commandName}을 제거했습니다.`, flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: '퇴장 로깅 채널을 제거했습니다.', flags: MessageFlags.Ephemeral });
     }
+    return interaction.reply({ content: config.global.goodbyeChannelId ? `현재 퇴장 로깅 채널: <#${config.global.goodbyeChannelId}>` : '설정되어 있지 않습니다.', flags: MessageFlags.Ephemeral });
+  }
 
-    const channelId = config.guilds[interaction.guildId][channelKey];
-    return interaction.reply({
-      content: channelId ? `현재 설정: <#${channelId}>` : '설정되어 있지 않습니다.',
-      flags: MessageFlags.Ephemeral,
-    });
+  if (interaction.commandName === '랭킹채널') {
+    if (interaction.user.id !== ADMIN_USER_ID) return interaction.reply({ content: '관리자만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    if (!interaction.guild) return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    const channel = interaction.options.getChannel('채널');
+    await publishRankingChannel(interaction.guild, channel);
+    return interaction.reply({ content: `${channel} 채널에 랭킹 게시를 설정했습니다.`, flags: MessageFlags.Ephemeral });
   }
 
   if (interaction.commandName !== '후원금액') return;
-
-  if (interaction.user.id !== ADMIN_USER_ID) {
-    return interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', flags: MessageFlags.Ephemeral });
-  }
-  if (!db) {
-    return interaction.reply({ content: 'DATABASE_URL이 설정되어 있지 않습니다.', flags: MessageFlags.Ephemeral });
-  }
+  if (interaction.user.id !== ADMIN_USER_ID) return interaction.reply({ content: '관리자만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+  if (!db) return interaction.reply({ content: 'DATABASE_URL이 설정되어 있지 않습니다.', flags: MessageFlags.Ephemeral });
 
   const target = interaction.options.getUser('유저');
   const action = interaction.options.getSubcommand();
@@ -331,42 +588,20 @@ client.on('interactionCreate', async (interaction) => {
     if (action === '조회') {
       const { rows } = await db.query('SELECT donation_amount FROM user_subscriptions WHERE user_id = $1', [target.id]);
       const amount = Number(rows[0]?.donation_amount || 0);
-      await interaction.reply({
-        content: `${target}의 누적 후원금액은 **${amount.toLocaleString('ko-KR')}원** 입니다.`,
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
+      return interaction.reply({ content: `${target}의 누적 후원금액은 **${amount.toLocaleString('ko-KR')}원** 입니다.`, flags: MessageFlags.Ephemeral });
     }
-
     const delta = interaction.options.getInteger('금액') * (action === '감소' ? -1 : 1);
     const { rows } = await db.query(
-      `
-      INSERT INTO user_subscriptions (user_id, tier, donation_amount, created_at, updated_at)
-      VALUES ($1, 'free', GREATEST($2, 0), NOW(), NOW())
-      ON CONFLICT (user_id) DO UPDATE SET donation_amount = GREATEST(user_subscriptions.donation_amount + $3, 0), updated_at = NOW()
-      RETURNING donation_amount
-      `,
+      `INSERT INTO user_subscriptions (user_id, tier, donation_amount, created_at, updated_at)
+       VALUES ($1, 'free', GREATEST($2, 0), NOW(), NOW())
+       ON CONFLICT (user_id) DO UPDATE SET donation_amount = GREATEST(user_subscriptions.donation_amount + $3, 0), updated_at = NOW()
+       RETURNING donation_amount`,
       [target.id, Math.max(delta, 0), delta]
     );
-
     const amount = Number(rows[0].donation_amount);
     const tier = amount >= 5000 ? 'premium' : amount >= 3000 ? 'basic' : 'free';
     await db.query('UPDATE user_subscriptions SET tier = $1, updated_at = NOW() WHERE user_id = $2', [tier, target.id]);
-
-    if (interaction.guild) {
-      const member = await interaction.guild.members.fetch(target.id).catch(() => null);
-      const role = member && interaction.guild.roles.cache.get(ROLE_IDS[tier]);
-      if (member && role) {
-        await member.roles.remove(Object.values(ROLE_IDS).filter((roleId) => roleId !== role.id));
-        await member.roles.add(role);
-      }
-    }
-
-    const rankingConfig = await db.query('SELECT channel_id FROM donation_ranking_channels WHERE guild_id = $1', [interaction.guildId]);
-    const rankingChannel = interaction.guild?.channels.cache.get(rankingConfig.rows[0]?.channel_id);
-    if (rankingChannel) await publishRankingChannel(interaction.guild, rankingChannel);
-
-    await interaction.reply({
+    return interaction.reply({
       content: `${target}의 후원금액을 ${action === '추가' ? '추가' : '감소'}했습니다.\n- 누적 금액: **${amount.toLocaleString('ko-KR')}원**\n- 적용 티어: **${tier.toUpperCase()}**`,
       flags: MessageFlags.Ephemeral,
     });
@@ -378,7 +613,6 @@ client.on('interactionCreate', async (interaction) => {
 
 client.on('guildMemberAdd', async (member) => {
   await assignEntryRoles(member);
-
   const config = loadChannelConfig();
   const channel = member.guild.channels.cache.get(config.global.welcomeChannelId);
   if (!channel) return;
@@ -389,27 +623,11 @@ client.on('guildMemberAdd', async (member) => {
     .setTitle('새로운 멤버가 들어왔어요')
     .setDescription([`환영합니다, ${member}!`, '', `**${member.guild.name}** 커뮤니티에 오신 걸 환영합니다.`, '즐거운 시간 보내세요.'].join('\n'))
     .addFields(
-      {
-        name: '회원 정보',
-        value:
-          `**태그** \`${member.user.tag}\`\n` +
-          `**계정 생성일** <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>\n` +
-          `**입장 시각** <t:${Math.floor(now / 1000)}:R>`,
-        inline: false,
-      },
-      {
-        name: '서버 정보',
-        value:
-          `**현재 인원** \`${member.guild.memberCount.toLocaleString()}명\`\n` +
-          `**순서** ${member.guild.memberCount}번째 멤버`,
-        inline: false,
-      }
+      { name: '회원 정보', value: `**태그** \`${member.user.tag}\`\n**계정 생성일** <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>\n**입장 시각** <t:${Math.floor(now / 1000)}:R>`, inline: false },
+      { name: '서버 정보', value: `**현재 인원** \`${member.guild.memberCount.toLocaleString()}명\`\n**순서** ${member.guild.memberCount}번째 멤버`, inline: false }
     )
     .setThumbnail(member.user.displayAvatarURL({ size: 512 }))
-    .setFooter({
-      text: `${member.guild.name} - We're happy to have you!`,
-      iconURL: member.guild.iconURL(),
-    })
+    .setFooter({ text: `${member.guild.name} - We're happy to have you!`, iconURL: member.guild.iconURL() })
     .setTimestamp();
 
   await channel.send({ embeds: [embed] });
@@ -425,26 +643,11 @@ client.on('guildMemberRemove', async (member) => {
     .setTitle('멤버가 서버를 떠났어요')
     .setDescription([`안녕히 가세요, ~~${member.user.tag}~~.`, '', `**${member.guild.name}** 커뮤니티에서 떠났습니다.`, '다음에 또 만나요.'].join('\n'))
     .addFields(
-      {
-        name: '회원 정보',
-        value:
-          `**태그** \`${member.user.tag}\`\n` +
-          `**ID** \`${member.id}\`\n` +
-          `**계정 생성일** <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>\n` +
-          `**서버 입장일** <t:${Math.floor(member.joinedTimestamp / 1000)}:R>`,
-        inline: false,
-      },
-      {
-        name: '서버 정보',
-        value: `**현재 인원** \`${member.guild.memberCount.toLocaleString()}명\``,
-        inline: false,
-      }
+      { name: '회원 정보', value: `**태그** \`${member.user.tag}\`\n**ID** \`${member.id}\`\n**계정 생성일** <t:${Math.floor(member.user.createdTimestamp / 1000)}:R>\n**서버 입장일** <t:${Math.floor(member.joinedTimestamp / 1000)}:R>`, inline: false },
+      { name: '서버 정보', value: `**현재 인원** \`${member.guild.memberCount.toLocaleString()}명\``, inline: false }
     )
     .setThumbnail(member.user.displayAvatarURL({ size: 512 }))
-    .setFooter({
-      text: `${member.guild.name} - We'll miss you!`,
-      iconURL: member.guild.iconURL(),
-    })
+    .setFooter({ text: `${member.guild.name} - We'll miss you!`, iconURL: member.guild.iconURL() })
     .setTimestamp();
 
   await channel.send({ embeds: [embed] });
