@@ -59,6 +59,30 @@ const guildCommands = [
     .setName('코인')
     .setDescription('내 코인 보유량을 확인합니다.'),
   new SlashCommandBuilder()
+    .setName('별명변경')
+    .setDescription('서버 별명을 변경합니다.')
+    .addStringOption((option) =>
+      option
+        .setName('별명')
+        .setDescription('새 서버 별명')
+        .setRequired(true)
+    ),
+  new SlashCommandBuilder()
+    .setName('별명설정')
+    .setDescription('관리자가 유저의 서버 별명을 설정합니다.')
+    .addUserOption((option) =>
+      option
+        .setName('유저')
+        .setDescription('대상 유저')
+        .setRequired(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('별명')
+        .setDescription('설정할 서버 별명')
+        .setRequired(true)
+    ),
+  new SlashCommandBuilder()
     .setName('미니게임')
     .setDescription('코인을 사용해 미니게임을 플레이합니다.')
     .addSubcommand((subcommand) =>

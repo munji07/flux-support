@@ -81,6 +81,7 @@ async function initSqlite() {
       level INTEGER NOT NULL DEFAULT 1,
       messages INTEGER NOT NULL DEFAULT 0,
       last_message_at INTEGER NOT NULL DEFAULT 0,
+      last_nickname_change_at INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (guild_id, user_id)
     )
   `);
@@ -119,11 +120,19 @@ function normalizeNicknamePrefix(nickname, level) {
   return `[LV.${level}] ${base || ''}`.trim();
 }
 
+function stripLevelPrefix(nickname) {
+  return nickname ? nickname.replace(/^\[LV\.\d+\]\s*/u, '').trim() : '';
+}
+
+function buildPrefixedNickname(level, nickname) {
+  return normalizeNicknamePrefix(nickname, level).slice(0, 32);
+}
+
 async function applyLevelNickname(member, level, settings) {
   if (!settings.nickname_prefix) return;
   const botMember = member.guild.members.me ?? await member.guild.members.fetchMe().catch(() => null);
   if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageNicknames)) return;
-  const nickname = normalizeNicknamePrefix(member.nickname || member.user.username, level);
+  const nickname = normalizeNicknamePrefix(stripLevelPrefix(member.displayName), level);
   await member.setNickname(nickname).catch(() => {});
 }
 
@@ -155,7 +164,7 @@ async function awardMessageProgress(member, contentLength) {
 
   await runSql(
     `UPDATE user_progress
-     SET xp = ?, coins = ?, level = ?, messages = ?, last_message_at = ?
+     SET xp = ?, coins = ?, level = ?, messages = ?, last_message_at = ?, last_nickname_change_at = last_nickname_change_at
      WHERE guild_id = ? AND user_id = ?`,
     [user.xp, user.coins, user.level, user.messages, user.last_message_at, member.guild.id, member.id]
   );
@@ -274,9 +283,9 @@ async function savePlayer(guildId, userId, patch) {
   const next = { ...current, ...patch };
   await runSql(
     `UPDATE user_progress
-     SET xp = ?, coins = ?, level = ?, messages = ?, last_message_at = ?
+     SET xp = ?, coins = ?, level = ?, messages = ?, last_message_at = ?, last_nickname_change_at = ?
      WHERE guild_id = ? AND user_id = ?`,
-    [next.xp, next.coins, next.level, next.messages, next.last_message_at, guildId, userId]
+    [next.xp, next.coins, next.level, next.messages, next.last_message_at, next.last_nickname_change_at, guildId, userId]
   );
   return next;
 }
@@ -297,8 +306,8 @@ async function syncLevelSystem(guild) {
     if (!before) initialized += 1;
 
     if (settings.nickname_prefix && botMember?.permissions.has(PermissionsBitField.Flags.ManageNicknames)) {
-      const desired = normalizeNicknamePrefix(member.nickname || member.user.username, user.level);
-      if ((member.nickname || member.user.username) !== desired) {
+      const desired = buildPrefixedNickname(user.level, stripLevelPrefix(member.displayName));
+      if (member.displayName !== desired) {
         await member.setNickname(desired).catch(() => {});
         updatedNicknames += 1;
       }
@@ -374,6 +383,59 @@ client.on('interactionCreate', async (interaction) => {
     }
     const user = await getPlayer(interaction.guildId, interaction.user.id);
     return interaction.reply({ content: `보유 코인: **${user.coins}**`, flags: MessageFlags.Ephemeral });
+  }
+
+  if (interaction.commandName === '별명변경') {
+    if (interaction.guildId !== LEVEL_GUILD_ID) {
+      return interaction.reply({ content: '이 명령어는 지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    }
+    const nickname = interaction.options.getString('별명');
+    const member = interaction.member;
+    const botMember = interaction.guild.members.me ?? await interaction.guild.members.fetchMe().catch(() => null);
+    if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageNicknames)) {
+      return interaction.reply({ content: '봇에 닉네임 변경 권한이 없습니다.', flags: MessageFlags.Ephemeral });
+    }
+
+    const settings = await getLevelSettings(interaction.guildId);
+    const user = await getPlayer(interaction.guildId, interaction.user.id);
+    const now = Date.now();
+    if (now - user.last_nickname_change_at < 30 * 60 * 1000) {
+      return interaction.reply({ content: '별명은 30분에 한 번만 변경할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    }
+
+    const desired = settings.nickname_prefix ? buildPrefixedNickname(user.level, nickname) : nickname.slice(0, 32);
+    user.last_nickname_change_at = now;
+    await savePlayer(interaction.guildId, interaction.user.id, user);
+    await member.setNickname(desired).catch(() => {});
+    return interaction.reply({ content: `서버 별명을 ${desired} 로 변경했습니다.`, flags: MessageFlags.Ephemeral });
+  }
+
+  if (interaction.commandName === '별명설정') {
+    if (interaction.user.id !== ADMIN_USER_ID) {
+      return interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', flags: MessageFlags.Ephemeral });
+    }
+    if (interaction.guildId !== LEVEL_GUILD_ID) {
+      return interaction.reply({ content: '이 명령어는 지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    }
+
+    const target = interaction.options.getUser('유저');
+    const nickname = interaction.options.getString('별명');
+    const botMember = interaction.guild.members.me ?? await interaction.guild.members.fetchMe().catch(() => null);
+    if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageNicknames)) {
+      return interaction.reply({ content: '봇에 닉네임 변경 권한이 없습니다.', flags: MessageFlags.Ephemeral });
+    }
+
+    const settings = await getLevelSettings(interaction.guildId);
+    const user = await getPlayer(interaction.guildId, target.id);
+    const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+    if (!member) {
+      return interaction.reply({ content: '대상 유저를 서버에서 찾을 수 없습니다.', flags: MessageFlags.Ephemeral });
+    }
+
+    const desired = settings.nickname_prefix ? buildPrefixedNickname(user.level, nickname) : nickname.slice(0, 32);
+    await savePlayer(interaction.guildId, target.id, user);
+    await member.setNickname(desired).catch(() => {});
+    return interaction.reply({ content: `${target}의 서버 별명을 ${desired} 로 설정했습니다.`, flags: MessageFlags.Ephemeral });
   }
 
   if (interaction.commandName === '미니게임') {
