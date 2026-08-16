@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, MessageFlags, PermissionsBitField } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, MessageFlags, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const pg = require('pg');
 const Database = require('better-sqlite3');
 const fs = require('fs');
@@ -522,8 +522,68 @@ client.on('messageCreate', async (message) => {
   await awardMessageProgress(message.member, message.content.length).catch(console.error);
 });
 
+const ARCADE_BET = 5;
+
+function arcadePanel(user, coins, title = '🎰 FLUX 도파민 아케이드') {
+  return {
+    embeds: [makeEmbed(title, `**${user.displayName || user.username}**님, 오늘의 운을 시험해보세요!\n\n💰 보유 코인: **${coins}**\n🎟️ 1회 플레이: **${ARCADE_BET} 코인**\n\n버튼을 누를 때마다 결과가 즉시 갱신됩니다.`, 0xffc857)
+      .setFooter({ text: '행운은 준비된 사람에게… 아니, 버튼을 많이 누른 사람에게!' })],
+    components: [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`arcade:slots:${user.id}`).setLabel('🎰 슬롯머신').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`arcade:dice:${user.id}`).setLabel('🎲 주사위').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`arcade:coin:${user.id}`).setLabel('🪙 코인 러시').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`arcade:close:${user.id}`).setLabel('🛑 닫기').setStyle(ButtonStyle.Danger)
+    )],
+  };
+}
+
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isButton() || !interaction.customId.startsWith('arcade:')) return;
+  const [, game, ownerId] = interaction.customId.split(':');
+  if (interaction.user.id !== ownerId) {
+    return interaction.reply({ content: '이 아케이드는 패널을 연 사람만 플레이할 수 있어요!', flags: MessageFlags.Ephemeral });
+  }
+  if (game === 'close') return interaction.update({ components: [] });
+
+  const user = await getPlayer(interaction.guildId, interaction.user.id);
+  if (user.coins < ARCADE_BET) {
+    return interaction.reply({ embeds: [errorEmbed('💸 코인이 부족해요', `최소 **${ARCADE_BET} 코인**이 필요합니다. 메시지를 보내 코인을 모아보세요!`)], flags: MessageFlags.Ephemeral });
+  }
+
+  user.coins -= ARCADE_BET;
+  let result;
+  let reward = 0;
+  if (game === 'slots') {
+    const symbols = ['🍒', '🍋', '🔔', '💎', '7️⃣'];
+    const spin = Array.from({ length: 3 }, () => symbols[Math.floor(Math.random() * symbols.length)]);
+    reward = spin[0] === spin[1] && spin[1] === spin[2] ? ARCADE_BET * 8 : spin[0] === spin[1] || spin[1] === spin[2] ? ARCADE_BET * 2 : 0;
+    result = `**| ${spin.join(' | ')} |**\n${reward ? `🎉 잭팟! **+${reward} 코인**` : '💥 아쉽다! 다음 버튼을 눌러보세요.'}`;
+  } else if (game === 'dice') {
+    const player = Math.floor(Math.random() * 6) + 1;
+    const bot = Math.floor(Math.random() * 6) + 1;
+    reward = player > bot ? ARCADE_BET * 3 : player === bot ? ARCADE_BET : 0;
+    result = `🙋 **${player}**  vs  🤖 **${bot}**\n${reward > ARCADE_BET ? `🏆 승리! **+${reward} 코인**` : reward ? '🤝 무승부! 코인을 돌려받았어요.' : '😵 패배… 다시 도전!'}`;
+  } else {
+    const choice = Math.random() < 0.5 ? '앞' : '뒤';
+    const picked = Math.random() < 0.5 ? '앞' : '뒤';
+    reward = choice === picked ? ARCADE_BET * 3 : 0;
+    result = `🎯 정답: **${choice}**  /  결과: **${picked}**\n${reward ? `⚡ 적중! **+${reward} 코인**` : '🫠 빗나갔어요!'}`;
+  }
+  user.coins += reward;
+  await savePlayer(interaction.guildId, interaction.user.id, user);
+  await interaction.update(arcadePanel(interaction.user, user.coins, `✨ ${game === 'slots' ? '슬롯 결과' : game === 'dice' ? '주사위 결과' : '앞뒤 결과'}\n\n${result}`));
+});
+
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
+
+  if (interaction.commandName === 'arcade') {
+    if (interaction.guildId !== LEVEL_GUILD_ID) {
+      return interaction.reply({ content: '이 명령어는 지정된 서버에서만 사용할 수 있어요.', flags: MessageFlags.Ephemeral });
+    }
+    const user = await getPlayer(interaction.guildId, interaction.user.id);
+    return interaction.reply(arcadePanel(interaction.member, user.coins));
+  }
 
   if (interaction.commandName === '레벨') {
     if (interaction.guildId !== LEVEL_GUILD_ID) {

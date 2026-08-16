@@ -50,6 +50,11 @@ const globalCommands = [
 ].map((command) => command.toJSON());
 
 const guildCommands = [
+  new SlashCommandBuilder()
+    .setName('arcade')
+    .setNameLocalizations({ ko: '아케이드' })
+    .setDescription('버튼으로 즐기는 코인 미니게임 아케이드')
+    .setDescriptionLocalizations({ ko: '버튼으로 즐기는 코인 미니게임 아케이드' }),
   new SlashCommandBuilder().setName('등급역할').setDescription('모든 유저의 등급에 맞춰 역할을 부여합니다.'),
   new SlashCommandBuilder()
     .setName('레벨')
