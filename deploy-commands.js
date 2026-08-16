@@ -14,6 +14,15 @@ const globalCommands = [
         .addChannelTypes(ChannelType.GuildText)
         .setRequired(true)
     ),
+  new SlashCommandBuilder()
+    .setName('기본역할')
+    .setDescription('새로 들어오는 유저에게 지급할 기본 역할을 설정합니다.')
+    .addRoleOption((option) =>
+      option
+        .setName('역할')
+        .setDescription('자동으로 지급할 역할')
+        .setRequired(true)
+    ),
 ].map((command) => command.toJSON());
 
 const guildCommands = [

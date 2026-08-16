@@ -31,7 +31,7 @@ function loadChannelConfig() {
   try {
     return JSON.parse(fs.readFileSync(channelConfigPath, 'utf8'));
   } catch {
-    return { global: { welcomeChannelId: '' }, guilds: {} };
+    return { global: { welcomeChannelId: '', defaultRoleId: '' }, guilds: {} };
   }
 }
 
@@ -139,6 +139,19 @@ async function publishRankingChannel(guild, channel) {
   return channel;
 }
 
+async function assignDefaultRole(member) {
+  const config = loadChannelConfig();
+  const defaultRoleId = config.global.defaultRoleId;
+  if (!defaultRoleId) return;
+
+  const role = member.guild.roles.cache.get(defaultRoleId);
+  const botMember = member.guild.members.me;
+  if (!role || !botMember?.permissions.has('ManageRoles')) return;
+  if (role.position >= botMember.roles.highest.position) return;
+
+  await member.roles.add(role).catch(console.error);
+}
+
 client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   if (db) {
@@ -200,6 +213,21 @@ client.on('interactionCreate', async (interaction) => {
     config.global.welcomeChannelId = channel.id;
     saveChannelConfig(config);
     return interaction.reply({ content: `입장 로깅 채널을 ${channel} 로 설정했습니다.`, flags: MessageFlags.Ephemeral });
+  }
+
+  if (interaction.commandName === '기본역할') {
+    if (interaction.user.id !== ADMIN_USER_ID) {
+      return interaction.reply({ content: '관리자만 사용할 수 있는 명령어입니다.', flags: MessageFlags.Ephemeral });
+    }
+    if (!interaction.guild) {
+      return interaction.reply({ content: '서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    }
+
+    const role = interaction.options.getRole('역할');
+    const config = loadChannelConfig();
+    config.global.defaultRoleId = role.id;
+    saveChannelConfig(config);
+    return interaction.reply({ content: `기본 역할을 ${role} 로 설정했습니다.`, flags: MessageFlags.Ephemeral });
   }
 
   if (interaction.commandName === '랭킹채널' || interaction.commandName === '퇴장채널') {
@@ -292,6 +320,8 @@ client.on('guildMemberAdd', async (member) => {
   const channel = member.guild.channels.cache.get(config.global.welcomeChannelId);
   if (!channel) return;
 
+  await assignDefaultRole(member);
+
   const now = Date.now();
   const embed = new EmbedBuilder()
     .setColor(0x57f287)
@@ -331,7 +361,7 @@ client.on('guildMemberRemove', async (member) => {
 
   const embed = new EmbedBuilder()
     .setColor(0xed4245)
-    .setTitle('멤버가 서버를 나갔어요')
+    .setTitle('멤버가 서버를 떠났어요')
     .setDescription([`안녕히 가세요, ~~${member.user.tag}~~.`, '', `**${member.guild.name}** 커뮤니티에서 떠났습니다.`, '다음에 또 만나요.'].join('\n'))
     .addFields(
       {
