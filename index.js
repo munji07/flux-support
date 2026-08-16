@@ -1,6 +1,6 @@
 const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, MessageFlags, PermissionsBitField } = require('discord.js');
 const pg = require('pg');
-const sqlite3 = require('sqlite3').verbose();
+const Database = require('better-sqlite3');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config({ path: '.env' });
@@ -24,33 +24,20 @@ const db = databaseUrl
   ? new pg.Pool({ connectionString: databaseUrl.toString(), ssl: { rejectUnauthorized: false } })
   : null;
 
-const sqlite = new sqlite3.Database(sqlitePath);
+const sqlite = new Database(sqlitePath);
+sqlite.pragma('journal_mode = WAL');
+sqlite.pragma('synchronous = NORMAL');
 
 function runSql(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    sqlite.run(sql, params, function (error) {
-      if (error) reject(error);
-      else resolve(this);
-    });
-  });
+  return sqlite.prepare(sql).run(params);
 }
 
 function getSql(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    sqlite.get(sql, params, (error, row) => {
-      if (error) reject(error);
-      else resolve(row);
-    });
-  });
+  return sqlite.prepare(sql).get(params);
 }
 
 function allSql(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    sqlite.all(sql, params, (error, rows) => {
-      if (error) reject(error);
-      else resolve(rows);
-    });
-  });
+  return sqlite.prepare(sql).all(params);
 }
 
 function loadChannelConfig() {
