@@ -1,10 +1,26 @@
+require('dotenv').config({ path: '.env' });
 const { Client, GatewayIntentBits, EmbedBuilder, ChannelType, MessageFlags, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const pg = require('pg');
-const Database = require('better-sqlite3');
-const fs = require('fs');
 const path = require('path');
-const { handleSupportInteraction } = require('./support.js');
-require('dotenv').config({ path: '.env' });
+const { handleSupportInteraction } = require('./src/support/commands.js');
+const { COMMUNITY_GUILD_ID, QUESTION_CHANNEL_ID, QUESTION_IDLE_MS, HF_MODEL } = require('./src/community');
+const { createIdleChat } = require('./src/community/idle-chat');
+const { isCommunityCommand } = require('./src/community/commands');
+const {
+  sqlite,
+  runSql,
+  getSql,
+  dbGet,
+  dbAll,
+  dbRun,
+  readSetting,
+  writeSetting,
+  deleteSetting,
+  loadChannelConfig,
+} = require('./lib/database.js');
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled promise rejection:', error);
+});
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildPresences],
@@ -12,13 +28,9 @@ const client = new Client({
 
 const ADMIN_USER_ID = '1269575955626725390';
 const MODERATOR_ROLE_ID = '1538529402256760884';
-const LEVEL_GUILD_ID = '1538513625730383902';
+const LEVEL_GUILD_ID = COMMUNITY_GUILD_ID;
 const SUPPORT_GUILD_ID = '1525458537139146812';
-const QUESTION_CHANNEL_ID = '1538530280137031731';
-const QUESTION_IDLE_MS = 10 * 60 * 1000;
-const HF_MODEL = 'Qwen/Qwen3.8-27B';
 const channelConfigPath = path.join(__dirname, 'channel-config.json');
-const sqlitePath = path.join(__dirname, 'progress.db');
 
 const databaseUrl = process.env.DATABASE_URL ? new URL(process.env.DATABASE_URL) : null;
 if (databaseUrl) {
@@ -29,75 +41,6 @@ if (databaseUrl) {
 const db = databaseUrl
   ? new pg.Pool({ connectionString: databaseUrl.toString(), ssl: { rejectUnauthorized: false } })
   : null;
-
-const sqlite = new Database(sqlitePath);
-sqlite.pragma('journal_mode = WAL');
-sqlite.pragma('synchronous = NORMAL');
-
-function runSql(sql, params = []) {
-  return sqlite.prepare(sql).run(params);
-}
-
-function getSql(sql, params = []) {
-  return sqlite.prepare(sql).get(params);
-}
-
-function allSql(sql, params = []) {
-  return sqlite.prepare(sql).all(params);
-}
-
-function loadChannelConfig() {
-  try {
-    const config = JSON.parse(fs.readFileSync(channelConfigPath, 'utf8'));
-    config.global ??= {};
-    config.global.welcomeChannelId ??= '';
-    config.global.goodbyeChannelId ??= '';
-    config.global.entryRoleIds ??= [];
-    config.guilds ??= {};
-    return config;
-  } catch {
-    return { global: { welcomeChannelId: '', goodbyeChannelId: '', entryRoleIds: [] }, guilds: {} };
-  }
-}
-
-function saveChannelConfig(config) {
-  fs.writeFileSync(channelConfigPath, JSON.stringify(config, null, 2));
-}
-
-function dbGet(sql, params = []) {
-  return sqlite.prepare(sql).get(params);
-}
-
-function dbAll(sql, params = []) {
-  return sqlite.prepare(sql).all(params);
-}
-
-function dbRun(sql, params = []) {
-  return sqlite.prepare(sql).run(params);
-}
-
-function readSetting(guildId, key) {
-  const row = dbGet('SELECT value FROM bot_settings WHERE guild_id = ? AND key = ?', [guildId, key]);
-  if (!row) return null;
-  try {
-    return JSON.parse(row.value);
-  } catch {
-    return row.value;
-  }
-}
-
-function writeSetting(guildId, key, value) {
-  dbRun(
-    `INSERT INTO bot_settings (guild_id, key, value)
-     VALUES (?, ?, ?)
-     ON CONFLICT (guild_id, key) DO UPDATE SET value = excluded.value`,
-    [guildId, key, JSON.stringify(value)]
-  );
-}
-
-function deleteSetting(guildId, key) {
-  dbRun('DELETE FROM bot_settings WHERE guild_id = ? AND key = ?', [guildId, key]);
-}
 
 function getEntryRoleIds(guildId) {
   const value = readSetting(guildId, 'entry_role_ids');
@@ -125,6 +68,15 @@ function setGoodbyeChannelId(guildId, channelId) {
   if (channelId) writeSetting(guildId, 'goodbye_channel_id', channelId);
   else deleteSetting(guildId, 'goodbye_channel_id');
 }
+
+const idleChat = createIdleChat({
+  client,
+  readSetting,
+  guildId: LEVEL_GUILD_ID,
+  fallbackChannelId: QUESTION_CHANNEL_ID,
+  idleMs: QUESTION_IDLE_MS,
+  model: HF_MODEL,
+});
 
 function makeEmbed(title, description, color = 0x5865f2) {
   return new EmbedBuilder().setColor(color).setTitle(title).setDescription(description);
@@ -299,7 +251,7 @@ async function initSqlite() {
     runSql(`ALTER TABLE friend_alerts ADD COLUMN game_name TEXT`);
   } catch {}
 
-  const legacy = loadChannelConfig();
+  const legacy = loadChannelConfig(channelConfigPath);
   if (legacy.global?.welcomeChannelId) {
     setWelcomeChannelId(LEVEL_GUILD_ID, legacy.global.welcomeChannelId);
   }
@@ -405,7 +357,10 @@ async function createQuestion() {
     }),
   });
 
-  if (!response.ok) throw new Error(`Hugging Face request failed: ${response.status}`);
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`Hugging Face request failed: ${response.status} ${details.slice(0, 500)}`);
+  }
   const data = await response.json();
   const text = data.choices?.[0]?.message?.content?.trim();
   if (!text) throw new Error('Hugging Face returned an empty question');
@@ -687,12 +642,16 @@ client.once('clientReady', async () => {
     await db.query('CREATE TABLE IF NOT EXISTS donation_ranking_channels (guild_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, message_id TEXT NOT NULL)').catch(console.error);
   }
 
-  scheduleIdleQuestion();
+  idleChat.schedule();
+});
+
+client.on('error', (error) => {
+  console.error('Discord client error:', error);
 });
 
 client.on('messageCreate', async (message) => {
   if (message.author?.bot) return;
-  if (message.channelId === getChatChannelId(message.guild?.id)) scheduleIdleQuestion();
+  idleChat.handleMessage(message);
   if (!message.guild || message.guild.id !== LEVEL_GUILD_ID) return;
   if (!message.content) return;
   if (!message.member) return;
@@ -813,6 +772,10 @@ client.on('interactionCreate', async (interaction) => {
 
   if (await handleSupportInteraction(interaction, db)) return;
 
+  if (isCommunityCommand(interaction.commandName) && interaction.guildId !== LEVEL_GUILD_ID) {
+    return interaction.reply({ content: '친목방 전용 명령어입니다.', flags: MessageFlags.Ephemeral });
+  }
+
   if (interaction.commandName === '출석') {
     const day = new Date().toISOString().slice(0, 10);
     const result = dbRun('INSERT OR IGNORE INTO attendance (guild_id, user_id, day) VALUES (?, ?, ?)', [interaction.guildId, interaction.user.id, day]);
@@ -828,7 +791,7 @@ client.on('interactionCreate', async (interaction) => {
     if (subcommand === '설정') {
       const channel = interaction.options.getChannel('채널');
       writeSetting(interaction.guildId, 'chat_channel_id', channel.id);
-      scheduleIdleQuestion();
+      idleChat.schedule();
       return interaction.reply({ embeds: [communityEmbed('잡담 채널 설정 완료', `${channel}에서 10분 동안 대화가 없으면 AI가 대화 주제를 보냅니다.`, 0x57f287)], flags: MessageFlags.Ephemeral });
     }
     if (subcommand === '해제') {
@@ -836,7 +799,7 @@ client.on('interactionCreate', async (interaction) => {
       clearTimeout(questionTimer);
       return interaction.reply({ embeds: [communityEmbed('잡담 채널 설정 해제', 'AI 자동 대화 주제 기능을 해제했습니다.', 0xffc857)], flags: MessageFlags.Ephemeral });
     }
-    return interaction.reply({ embeds: [communityEmbed('현재 잡담 채널', `<#${getChatChannelId(interaction.guildId)}>`, 0x5865f2)], flags: MessageFlags.Ephemeral });
+    return interaction.reply({ embeds: [communityEmbed('현재 잡담 채널', `<#${idleChat.getChannelId()}>`, 0x5865f2)], flags: MessageFlags.Ephemeral });
   }
 
   if (interaction.commandName === '주간활동') {
