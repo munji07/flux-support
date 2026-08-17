@@ -22,12 +22,13 @@ function createBalanceGame({ client, readSetting, writeSetting, deleteSetting, g
 
   async function generateBalanceQuestion() {
     const fallbacks = [
-      { title: '⚖️ 평생 하나만 골라야 한다면?', optionA: '평생 치킨 못 먹기', optionB: '평생 피자 못 먹기' },
-      { title: '⚖️ 초능력을 가질 수 있다면?', optionA: '투명인간 되기 (옷 제외)', optionB: '시간을 5초 전으로 되돌리기' },
-      { title: '⚖️ 극악의 밸런스 게임!', optionA: '여름에 히터 틀기', optionB: '겨울에 에어컨 틀기' },
-      { title: '⚖️ 직장 / 학교 딜레마', optionA: '일/공부 하나도 안 하고 칭찬받기', optionB: '열심히 하고 욕먹기' },
-      { title: '⚖️ 연애 딜레마', optionA: '내 과거 다 아는 연인', optionB: '자기 과거 절대 안 밝히는 연인' },
-      { title: '⚖️ 스마트폰 딜레마', optionA: '평생 데이터 1Mbps만 사용', optionB: '평생 배터리 최대 20%만 유지' },
+      { title: '⚖️ 평생 하나만 먹어야 한다면?', optionA: '평생 치킨만 먹기', optionB: '평생 피자만 먹기' },
+      { title: '⚖️ 진짜 기괴한 능력 딜레마', optionA: '소리 지를 때마다 10만 원 나오기 (귀 찢어지게 지름)', optionB: '조용히 눈 깜빡일 때마다 1천 원 나오기' },
+      { title: '⚖️ 주말 극악의 딜레마', optionA: '하루 종일 집에 혼자 있고 아무도 연락 안 옴', optionB: '하루에 약속 5개 잡혀서 쉬지도 못함' },
+      { title: '⚖️ 폰 딜레마', optionA: '평생 Wi-Fi / 데이터 없이 살기', optionB: '평생 에어컨 / 히터 없이 살기' },
+      { title: '⚖️ 친구 / 연애 딜레마', optionA: '내 흑역사 다 아는 찐친', optionB: '나한테 비밀이 전혀 없는 연인' },
+      { title: '⚖️ 수면 딜레마', optionA: '하루 3시간 자고 완전 피곤함 제로', optionB: '하루 12시간 자야만 겨우 안 피곤함' },
+      { title: '⚖️ 민트초코 딜레마', optionA: '평생 모든 음식에서 민트맛 나기', optionB: '평생 모든 음식에서 탄맛 나기' },
     ];
 
     try {
@@ -46,16 +47,16 @@ function createBalanceGame({ client, readSetting, writeSetting, deleteSetting, g
             {
               role: 'system',
               content:
-                '너는 딜레마와 흥미진진한 선택지를 만드는 밸런스 게임 전문 AI다. 다음 형식의 JSON만 정확히 출력해라: {"title": "주제 또는 설명", "optionA": "선택지 A", "optionB": "선택지 B"}. 마크다운, 코드블록(```json 등)이나 불필요한 설명은 포함하지 마라.',
+                '너는 10대~20대가 디스코드에서 대화할 때 극적으로 의견이 갈리는 쉬운 밸런스 게임을 만드는 AI다. 어려운 단어나 복잡한 철학적 딜레마는 절대 금지한다. 짧고 굵으며 반응이 폭발적인 질문을 작성해라. 반드시 다음 JSON만 반환해라: {"title": "주제", "optionA": "A선택지", "optionB": "B선택지"}. 마크다운이나 코드블록은 절대 붙이지 마라.',
             },
             {
               role: 'user',
               content:
-                '일상, 초능력, 음주/음식, 연애, 직장/학교, 재밌는 딜레마 중 무작위 주제로 당장 선택하기 극도로 까다롭고 신선한 밸런스 게임 1개를 JSON으로 만들어라.',
+                '음식, 일상, 수면, 게임, 돈, 초능력 중 유저들의 의견이 정확히 50:50으로 갈릴 만한 직관적이고 쉬운 한국어 밸런스 게임 1개를 JSON으로 만들어라.',
             },
           ],
           max_tokens: 150,
-          temperature: 0.95,
+          temperature: 0.9,
         }),
       });
       clearTimeout(timeoutId);
