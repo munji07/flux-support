@@ -291,7 +291,9 @@ async function initSqlite() {
   await runSql(`CREATE TABLE IF NOT EXISTS interest_roles (guild_id TEXT NOT NULL, role_id TEXT NOT NULL, label TEXT NOT NULL, PRIMARY KEY (guild_id, role_id))`);
   await runSql(`CREATE TABLE IF NOT EXISTS friend_requests (guild_id TEXT NOT NULL, requester_id TEXT NOT NULL, target_id TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (guild_id, requester_id, target_id))`);
   await runSql(`CREATE TABLE IF NOT EXISTS friend_alerts (guild_id TEXT NOT NULL, user_id TEXT NOT NULL, friend_id TEXT NOT NULL, action TEXT NOT NULL, PRIMARY KEY (guild_id, user_id, friend_id, action))`);
-  await runSql(`ALTER TABLE friend_alerts ADD COLUMN game_name TEXT`).catch(() => {});
+  try {
+    runSql(`ALTER TABLE friend_alerts ADD COLUMN game_name TEXT`);
+  } catch {}
 
   const legacy = loadChannelConfig();
   if (legacy.global?.welcomeChannelId) {
@@ -682,7 +684,11 @@ client.on('messageCreate', async (message) => {
   if (!message.content) return;
   if (!message.member) return;
 
-  await runSql('INSERT INTO activity_log (guild_id, user_id, created_at) VALUES (?, ?, ?)', [message.guild.id, message.author.id, Date.now()]).catch(() => {});
+  try {
+    runSql('INSERT INTO activity_log (guild_id, user_id, created_at) VALUES (?, ?, ?)', [message.guild.id, message.author.id, Date.now()]);
+  } catch (error) {
+    console.error('Activity log error:', error);
+  }
   await awardMessageProgress(message.member, message.content.length).catch(console.error);
 });
 
