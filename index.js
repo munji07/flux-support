@@ -8,7 +8,6 @@ const { createIdleChat } = require('./src/community/idle-chat');
 const { createBalanceGame } = require('./src/community/balance-game');
 const { isCommunityCommand } = require('./src/community/commands');
 const {
-  sqlite,
   runSql,
   getSql,
   dbGet,
@@ -233,7 +232,7 @@ async function initSqlite() {
       PRIMARY KEY (guild_id, user_id)
     )
   `);
-  const userProgressColumns = sqlite.prepare(`PRAGMA table_info(user_progress)`).all().map((row) => row.name);
+  const userProgressColumns = dbAll('PRAGMA table_info(user_progress)').map((row) => row.name);
   if (userProgressColumns.length) {
     if (!userProgressColumns.includes('last_nickname_change_at')) {
       await runSql(`ALTER TABLE user_progress ADD COLUMN last_nickname_change_at INTEGER NOT NULL DEFAULT 0`);
@@ -644,6 +643,7 @@ async function syncLevelSystem(guild) {
 
   let initialized = 0;
   let updatedNicknames = 0;
+  let skippedDowngrades = 0;
 
   for (const member of guild.members.cache.values()) {
     if (member.user.bot) continue;
@@ -653,15 +653,20 @@ async function syncLevelSystem(guild) {
     if (!before) initialized += 1;
 
     if (settings.nickname_prefix && botMember?.permissions.has(PermissionsBitField.Flags.ManageNicknames)) {
-      const desired = buildPrefixedNickname(user.level, stripLevelPrefix(member.displayName));
-      if (member.displayName !== desired) {
-        await member.setNickname(desired).catch(() => {});
-        updatedNicknames += 1;
+      const shownLevel = Number((member.displayName.match(/^\[LV\.(\d+)\]\s*/u) || [])[1] || 0);
+      if (shownLevel > user.level) {
+        skippedDowngrades += 1;
+      } else {
+        const desired = buildPrefixedNickname(user.level, stripLevelPrefix(member.displayName));
+        if (member.displayName !== desired) {
+          await member.setNickname(desired).catch(() => {});
+          updatedNicknames += 1;
+        }
       }
     }
   }
 
-  return { initialized, updatedNicknames };
+  return { initialized, updatedNicknames, skippedDowngrades };
 }
 
 client.once('clientReady', async () => {
@@ -1004,8 +1009,10 @@ const mapping = dbGet('SELECT role_id FROM interest_roles WHERE guild_id = ? AND
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       try {
         const result = await syncLevelSystem(interaction.guild);
+        const detail = [`**초기화된 DB 행**: ${result.initialized}개`, `**닉네임 갱신**: ${result.updatedNicknames}명`];
+        if (result.skippedDowngrades > 0) detail.push(`**레벨 보호(닉네임 하향 방지)**: ${result.skippedDowngrades}명`);
         await interaction.editReply({
-          embeds: [successEmbed('레벨 시스템 동기화 완료', `**초기화된 DB 행**: ${result.initialized}개\n**닉네임 갱신**: ${result.updatedNicknames}명`)],
+          embeds: [successEmbed('레벨 시스템 동기화 완료', detail.join('\n'))],
         });
       } catch (error) {
         console.error('Level sync error:', error);

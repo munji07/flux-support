@@ -1,2 +1,5 @@
 AGENTS.md
 .env
+progress.db
+progress.db-shm
+progress.db-wal
