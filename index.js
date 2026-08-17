@@ -291,6 +291,7 @@ async function initSqlite() {
   await runSql(`CREATE TABLE IF NOT EXISTS interest_roles (guild_id TEXT NOT NULL, role_id TEXT NOT NULL, label TEXT NOT NULL, PRIMARY KEY (guild_id, role_id))`);
   await runSql(`CREATE TABLE IF NOT EXISTS friend_requests (guild_id TEXT NOT NULL, requester_id TEXT NOT NULL, target_id TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (guild_id, requester_id, target_id))`);
   await runSql(`CREATE TABLE IF NOT EXISTS friend_alerts (guild_id TEXT NOT NULL, user_id TEXT NOT NULL, friend_id TEXT NOT NULL, action TEXT NOT NULL, PRIMARY KEY (guild_id, user_id, friend_id, action))`);
+  await runSql(`ALTER TABLE friend_alerts ADD COLUMN game_name TEXT`).catch(() => {});
 
   const legacy = loadChannelConfig();
   if (legacy.global?.welcomeChannelId) {
@@ -353,8 +354,10 @@ function friendIds(guildId, userId) {
   return dbAll(`SELECT CASE WHEN requester_id = ? THEN target_id ELSE requester_id END AS user_id FROM friend_requests WHERE guild_id = ? AND status = 'accepted' AND (requester_id = ? OR target_id = ?)`, [userId, guildId, userId, userId]).map((row) => row.user_id);
 }
 
-async function sendFriendAlerts(guildId, friendId, action, detail) {
-  const rows = dbAll('SELECT user_id FROM friend_alerts WHERE guild_id = ? AND friend_id = ? AND action = ?', [guildId, friendId, action]);
+async function sendFriendAlerts(guildId, friendId, action, detail, gameName = null) {
+  const rows = action === 'game'
+    ? dbAll('SELECT user_id FROM friend_alerts WHERE guild_id = ? AND friend_id = ? AND action = ? AND (game_name IS NULL OR lower(game_name) = lower(?))', [guildId, friendId, action, gameName])
+    : dbAll('SELECT user_id FROM friend_alerts WHERE guild_id = ? AND friend_id = ? AND action = ?', [guildId, friendId, action]);
   for (const row of rows) {
     const user = await client.users.fetch(row.user_id).catch(() => null);
     await user?.send(`친구 알림: <@${friendId}>님이 ${detail}`).catch(() => {});
@@ -692,7 +695,7 @@ client.on('presenceUpdate', async (oldPresence, newPresence) => {
   if (!newPresence?.guild || newPresence.user?.bot) return;
   const oldGames = new Set((oldPresence?.activities || []).filter((activity) => activity.type === 0).map((activity) => activity.name));
   for (const activity of (newPresence.activities || []).filter((item) => item.type === 0 && !oldGames.has(item.name))) {
-    await sendFriendAlerts(newPresence.guild.id, newPresence.userId, 'game', `**${activity.name}** 게임을 시작했습니다.`);
+    await sendFriendAlerts(newPresence.guild.id, newPresence.userId, 'game', `**${activity.name}** 게임을 시작했습니다.`, activity.name);
   }
 });
 
@@ -796,7 +799,7 @@ client.on('interactionCreate', async (interaction) => {
     return interaction.reply({ content: subcommand === '선택' ? `${role} 역할을 추가했습니다.` : `${role} 역할을 해제했습니다.`, flags: MessageFlags.Ephemeral });
   }
 
-  if (['친구전송', '친구삭제', '친구받기', '친구목록', '친구알림'].includes(interaction.commandName)) {
+  if (['친구전송', '친구삭제', '친구받기', '친구목록', '친구알림', 'game'].includes(interaction.commandName)) {
     const guildId = interaction.guildId;
     const userId = interaction.user.id;
     const target = interaction.options.getUser('유저');
@@ -822,6 +825,13 @@ client.on('interactionCreate', async (interaction) => {
       return interaction.reply({ content: ids.length ? `친구 목록\n${ids.map((id) => `<@${id}>`).join('\n')}` : '친구가 없습니다.', flags: MessageFlags.Ephemeral });
     }
     if (!isFriend(guildId, userId, target.id)) return interaction.reply({ content: '친구로 등록된 유저만 알림을 설정할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    if (interaction.commandName === 'game') {
+      const gameName = interaction.options.getString('게임').trim();
+      const enabled = interaction.options.getBoolean('사용') ?? true;
+      if (enabled) dbRun('INSERT OR REPLACE INTO friend_alerts (guild_id, user_id, friend_id, action, game_name) VALUES (?, ?, ?, ?, ?)', [guildId, userId, target.id, 'game', gameName]);
+      else dbRun('DELETE FROM friend_alerts WHERE guild_id = ? AND user_id = ? AND friend_id = ? AND action = ? AND lower(game_name) = lower(?)', [guildId, userId, target.id, 'game', gameName]);
+      return interaction.reply({ content: `${target}님의 **${gameName}** 게임 시작 알림을 ${enabled ? '켰습니다' : '껐습니다'}.`, flags: MessageFlags.Ephemeral });
+    }
     const action = interaction.options.getString('행동');
     const enabled = interaction.options.getBoolean('사용') ?? true;
     if (enabled) dbRun('INSERT OR REPLACE INTO friend_alerts (guild_id, user_id, friend_id, action) VALUES (?, ?, ?, ?)', [guildId, userId, target.id, action]);

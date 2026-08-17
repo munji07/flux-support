@@ -204,6 +204,7 @@ const guildCommands = [
   new SlashCommandBuilder().setName('친구받기').setDescription('받은 친구 요청을 수락합니다.').addUserOption((option) => option.setName('유저').setDescription('요청한 유저').setRequired(true)),
   new SlashCommandBuilder().setName('친구목록').setDescription('친구 목록을 확인합니다.'),
   new SlashCommandBuilder().setName('친구알림').setDescription('친구 행동 DM 알림을 설정하거나 해제합니다.').addUserOption((option) => option.setName('유저').setDescription('친구').setRequired(true)).addStringOption((option) => option.setName('행동').setDescription('알림 행동').addChoices({ name: '음성 채널 입장', value: 'voice' }, { name: '게임 시작', value: 'game' }).setRequired(true)).addBooleanOption((option) => option.setName('사용').setDescription('알림 사용 여부(생략하면 켜기)')),
+  new SlashCommandBuilder().setName('game').setDescription('친구가 특정 게임을 시작할 때 DM 알림을 설정합니다.').addUserOption((option) => option.setName('유저').setDescription('친구').setRequired(true)).addStringOption((option) => option.setName('게임').setDescription('Discord에 표시되는 정확한 게임 이름').setRequired(true)).addBooleanOption((option) => option.setName('사용').setDescription('알림 사용 여부(생략하면 켜기)')),
 ].map((command) => command.toJSON());
 
 const supportCommandNames = new Set(['랭킹채널', '후원금액']);
