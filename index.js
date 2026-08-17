@@ -812,8 +812,9 @@ client.on('interactionCreate', async (interaction) => {
     if (target?.bot || target?.id === userId) return interaction.reply({ content: '봇이나 자기 자신은 친구로 등록할 수 없습니다.', flags: MessageFlags.Ephemeral });
     if (interaction.commandName === '친구전송') {
       dbRun(`INSERT OR REPLACE INTO friend_requests (guild_id, requester_id, target_id, status, created_at) VALUES (?, ?, ?, 'pending', ?)`, [guildId, userId, target.id, Date.now()]);
-      await target.send(`<@${userId}>님이 친구 요청을 보냈습니다. 서버에서 \/친구받기 유저:${interaction.user.username} 으로 수락할 수 있습니다.`).catch(() => {});
-      return interaction.reply({ content: `${target}님에게 친구 요청을 보냈습니다.`, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `${target}님에게 친구 요청을 보냈습니다.`, flags: MessageFlags.Ephemeral });
+      await target.send(`<@${userId}>님이 친구 요청을 보냈습니다.\n수락하려면 서버에서 **/친구받기 유저:${interaction.user.username}** 명령어를 사용하세요.`).catch(() => {});
+      return;
     }
     if (interaction.commandName === '친구받기') {
       const request = dbGet(`SELECT 1 FROM friend_requests WHERE guild_id = ? AND requester_id = ? AND target_id = ? AND status = 'pending'`, [guildId, target.id, userId]);
