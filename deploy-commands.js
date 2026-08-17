@@ -204,9 +204,9 @@ const guildCommands = [
   new SlashCommandBuilder()
     .setName('관심사')
     .setDescription('관심사 역할을 설정하거나 선택합니다.')
-    .addSubcommand((subcommand) => subcommand.setName('설정').setDescription('관리자가 관심사 역할을 연결합니다.').addStringOption((option) => option.setName('관심사').setDescription('관심사').addChoices(...['발로란트', '마인크래프트', '오버워치', '롤', '로블록스', '에니'].map((name) => ({ name, value: name }))).setRequired(true)).addRoleOption((option) => option.setName('역할').setDescription('연결할 역할').setRequired(true)))
-.addSubcommand((subcommand) => subcommand.setName('선택').setDescription('관심사 역할을 선택합니다.').addStringOption((option) => option.setName('관심사').setDescription('관심사').addChoices(...['발로란트', '마인크래프트', '오버워치', '롤', '로블록스', '에니'].map((name) => ({ name, value: name }))).setRequired(true)))
-    .addSubcommand((subcommand) => subcommand.setName('제거').setDescription('관심사 역할을 제거합니다.').addStringOption((option) => option.setName('관심사').setDescription('관심사').addChoices(...['발로란트', '마인크래프트', '오버워치', '롤', '로블록스', '에니'].map((name) => ({ name, value: name }))).setRequired(true)))
+    .addSubcommand((subcommand) => subcommand.setName('설정').setDescription('관리자가 관심사 역할을 연결합니다.').addStringOption((option) => option.setName('관심사').setDescription('관심사').addChoices(...['베틀그라운드', '발로란트', '마인크래프트', '오버워치', '롤', '로블록스', '에니'].map((name) => ({ name, value: name }))).setRequired(true)).addRoleOption((option) => option.setName('역할').setDescription('연결할 역할').setRequired(true)))
+.addSubcommand((subcommand) => subcommand.setName('선택').setDescription('관심사 역할을 선택합니다.').addStringOption((option) => option.setName('관심사').setDescription('관심사').addChoices(...['베틀그라운드', '발로란트', '마인크래프트', '오버워치', '롤', '로블록스', '에니'].map((name) => ({ name, value: name }))).setRequired(true)))
+    .addSubcommand((subcommand) => subcommand.setName('제거').setDescription('관심사 역할을 제거합니다.').addStringOption((option) => option.setName('관심사').setDescription('관심사').addChoices(...['베틀그라운드', '발로란트', '마인크래프트', '오버워치', '롤', '로블록스', '에니'].map((name) => ({ name, value: name }))).setRequired(true)))
     .addSubcommand((subcommand) => subcommand.setName('목록').setDescription('관심사 역할 목록을 확인합니다.')),
   new SlashCommandBuilder().setName('친구전송').setDescription('친구 요청을 보냅니다.').addUserOption((option) => option.setName('유저').setDescription('친구 요청 대상').setRequired(true)),
   new SlashCommandBuilder().setName('친구삭제').setDescription('친구를 삭제합니다.').addUserOption((option) => option.setName('유저').setDescription('삭제할 친구').setRequired(true)),
