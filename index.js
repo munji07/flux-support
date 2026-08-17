@@ -138,6 +138,10 @@ function errorEmbed(title, description) {
   return makeEmbed(title, description, 0xed4245);
 }
 
+function communityEmbed(title, description, color = 0x5865f2) {
+  return new EmbedBuilder().setColor(color).setTitle(title).setDescription(description).setTimestamp();
+}
+
 function hasModeratorRole(member) {
   return member?.roles?.cache?.has(MODERATOR_ROLE_ID);
 }
@@ -722,7 +726,33 @@ function arcadePanel(user, coins, title = '🎰 FLUX 도파민 아케이드') {
 }
 
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isButton() || !interaction.customId.startsWith('arcade:')) return;
+  if (!interaction.isButton()) return;
+  if (interaction.customId.startsWith('friend:')) {
+    const [, action, guildId, requesterId, targetId] = interaction.customId.split(':');
+    if (interaction.user.id !== targetId) {
+      return interaction.reply({ content: '이 친구 요청은 요청을 받은 유저만 처리할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    }
+    const request = dbGet(`SELECT status FROM friend_requests WHERE guild_id = ? AND requester_id = ? AND target_id = ?`, [guildId, requesterId, targetId]);
+    if (!request || request.status !== 'pending') {
+      return interaction.update({ content: '이미 처리된 친구 요청입니다.', embeds: [], components: [] });
+    }
+    if (action === 'accept') {
+      dbRun(`UPDATE friend_requests SET status = 'accepted' WHERE guild_id = ? AND requester_id = ? AND target_id = ?`, [guildId, requesterId, targetId]);
+      await interaction.update({ content: '친구 요청을 수락했습니다.', embeds: [], components: [] });
+      const requester = await client.users.fetch(requesterId).catch(() => null);
+      const guild = client.guilds.cache.get(guildId);
+      const requesterMember = await guild?.members.fetch(requesterId).catch(() => null);
+      const targetMember = await guild?.members.fetch(targetId).catch(() => null);
+      const shared = dbAll('SELECT label, role_id FROM interest_roles WHERE guild_id = ?', [guildId])
+        .filter((row) => requesterMember?.roles.cache.has(row.role_id) && targetMember?.roles.cache.has(row.role_id))
+        .map((row) => row.label);
+      await requester?.send(`친구 요청이 수락되었습니다! 이제 <@${targetId}>님과 친구입니다.${shared.length ? `\n\n공통 관심사: **${shared.join(', ')}**` : ''}`).catch(() => {});
+      return;
+    }
+    dbRun(`UPDATE friend_requests SET status = 'rejected' WHERE guild_id = ? AND requester_id = ? AND target_id = ?`, [guildId, requesterId, targetId]);
+    return interaction.update({ content: '친구 요청을 거절했습니다.', embeds: [], components: [] });
+  }
+  if (!interaction.customId.startsWith('arcade:')) return;
   const [, game, ownerId] = interaction.customId.split(':');
   if (interaction.user.id !== ownerId) {
     return interaction.reply({ content: '이 아케이드는 패널을 연 사람만 플레이할 수 있어요!', flags: MessageFlags.Ephemeral });
@@ -778,31 +808,46 @@ client.on('interactionCreate', async (interaction) => {
     const day = new Date().toISOString().slice(0, 10);
     const result = dbRun('INSERT OR IGNORE INTO attendance (guild_id, user_id, day) VALUES (?, ?, ?)', [interaction.guildId, interaction.user.id, day]);
     const streak = dbGet(`SELECT COUNT(*) AS count FROM attendance WHERE guild_id = ? AND user_id = ? AND day >= date('now', '-30 day')`, [interaction.guildId, interaction.user.id]).count;
-    return interaction.reply({ content: result.changes ? `출석 완료! 최근 30일 출석 **${streak}일**입니다.` : '오늘은 이미 출석했습니다.', flags: MessageFlags.Ephemeral });
+    return interaction.reply({ embeds: [communityEmbed(result.changes ? '출석 완료' : '이미 출석함', result.changes ? `최근 30일 출석 **${streak}일**입니다.` : '오늘은 이미 출석했습니다.', result.changes ? 0x57f287 : 0xffc857)], flags: MessageFlags.Ephemeral });
   }
 
   if (interaction.commandName === '주간활동') {
     const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const rows = dbAll(`SELECT user_id, COUNT(*) AS count FROM activity_log WHERE guild_id = ? AND created_at >= ? GROUP BY user_id ORDER BY count DESC LIMIT 10`, [interaction.guildId, since]);
-    return interaction.reply({ content: rows.length ? `**주간 활동 랭킹**\n${rows.map((row, index) => `${index + 1}. <@${row.user_id}> — ${row.count}회`).join('\n')}` : '아직 이번 주 활동 기록이 없습니다.' });
+    return interaction.reply({ embeds: [communityEmbed('주간 활동 랭킹', rows.length ? rows.map((row, index) => `${index + 1}. <@${row.user_id}> — ${row.count}회`).join('\n') : '아직 이번 주 활동 기록이 없습니다.') ] });
   }
 
   if (interaction.commandName === '관심사') {
     const subcommand = interaction.options.getSubcommand();
-    const role = interaction.options.getRole('역할');
-    if (subcommand === '추가') {
+    const interest = interaction.options.getString('관심사');
+    if (subcommand === '설정') {
+      const role = interaction.options.getRole('역할');
       if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageRoles)) return interaction.reply({ content: '역할을 관리할 권한이 필요합니다.', flags: MessageFlags.Ephemeral });
-      dbRun('INSERT OR REPLACE INTO interest_roles (guild_id, role_id, label) VALUES (?, ?, ?)', [interaction.guildId, role.id, interaction.options.getString('이름')]);
-      return interaction.reply({ content: `${role} 관심사 역할을 등록했습니다.`, flags: MessageFlags.Ephemeral });
+      dbRun('INSERT OR REPLACE INTO interest_roles (guild_id, role_id, label) VALUES (?, ?, ?)', [interaction.guildId, role.id, interest]);
+      return interaction.reply({ embeds: [communityEmbed('관심사 역할 설정 완료', `${role}을(를) **${interest}** 관심사로 등록했습니다.`, 0x57f287)], flags: MessageFlags.Ephemeral });
     }
     if (subcommand === '목록') {
       const rows = dbAll('SELECT role_id, label FROM interest_roles WHERE guild_id = ?', [interaction.guildId]);
-      return interaction.reply({ content: rows.length ? rows.map((row) => `- ${row.label}: <@&${row.role_id}>`).join('\n') : '등록된 관심사 역할이 없습니다.', flags: MessageFlags.Ephemeral });
+      return interaction.reply({ embeds: [communityEmbed('관심사 목록', rows.length ? rows.map((row) => `- **${row.label}**: <@&${row.role_id}>`).join('\n') : '등록된 관심사 역할이 없습니다.')], flags: MessageFlags.Ephemeral });
     }
-    if (!dbGet('SELECT 1 FROM interest_roles WHERE guild_id = ? AND role_id = ?', [interaction.guildId, role.id])) return interaction.reply({ content: '등록되지 않은 관심사 역할입니다.', flags: MessageFlags.Ephemeral });
-    if (subcommand === '선택') await interaction.member.roles.add(role);
-    else await interaction.member.roles.remove(role);
-    return interaction.reply({ content: subcommand === '선택' ? `${role} 역할을 추가했습니다.` : `${role} 역할을 해제했습니다.`, flags: MessageFlags.Ephemeral });
+    const mapping = dbGet('SELECT role_id FROM interest_roles WHERE guild_id = ? AND label = ?', [interaction.guildId, interest]);
+    if (!mapping) return interaction.reply({ content: '해당 관심사 역할이 아직 관리자에 의해 설정되지 않았습니다.', flags: MessageFlags.Ephemeral });
+    const role = interaction.guild.roles.cache.get(mapping.role_id);
+    if (!role) return interaction.reply({ content: '연결된 역할을 찾을 수 없습니다.', flags: MessageFlags.Ephemeral });
+    await interaction.member.roles.add(role);
+    return interaction.reply({ content: `${role} 역할을 추가했습니다.`, flags: MessageFlags.Ephemeral });
+  }
+
+  if (interaction.commandName === '친구추천') {
+    const members = await interaction.guild.members.fetch();
+    const candidates = members.filter((member) => !member.user.bot && member.id !== interaction.user.id && !isFriend(interaction.guildId, interaction.user.id, member.id));
+    const rows = dbAll('SELECT role_id, label FROM interest_roles WHERE guild_id = ?', [interaction.guildId]);
+    const recommendations = [];
+    for (const member of candidates.values()) {
+      const shared = rows.filter((row) => member.roles.cache.has(row.role_id) && interaction.member.roles.cache.has(row.role_id)).map((row) => row.label);
+      if (shared.length) recommendations.push(`${member} — ${shared.join(', ')}`);
+    }
+    return interaction.reply({ content: recommendations.length ? `**관심사가 같은 친구 추천**\n${recommendations.slice(0, 10).join('\n')}` : '관심사가 같은 친구를 찾지 못했습니다.', flags: MessageFlags.Ephemeral });
   }
 
   if (['친구전송', '친구삭제', '친구받기', '친구목록', '친구알림', 'game'].includes(interaction.commandName)) {
@@ -813,7 +858,19 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === '친구전송') {
       dbRun(`INSERT OR REPLACE INTO friend_requests (guild_id, requester_id, target_id, status, created_at) VALUES (?, ?, ?, 'pending', ?)`, [guildId, userId, target.id, Date.now()]);
       await interaction.reply({ content: `${target}님에게 친구 요청을 보냈습니다.`, flags: MessageFlags.Ephemeral });
-      await target.send(`<@${userId}>님이 친구 요청을 보냈습니다.\n수락하려면 서버에서 **/친구받기 유저:${interaction.user.username}** 명령어를 사용하세요.`).catch(() => {});
+      const requestButtons = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`friend:accept:${guildId}:${userId}:${target.id}`).setLabel('친구 요청 수락').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`friend:reject:${guildId}:${userId}:${target.id}`).setLabel('거절').setStyle(ButtonStyle.Danger),
+      );
+      await target.send({
+        embeds: [new EmbedBuilder()
+          .setColor(0x5865f2)
+          .setTitle('새로운 친구 요청')
+          .setDescription(`<@${userId}>님이 친구 요청을 보냈습니다.`)
+          .addFields({ name: '요청자', value: `${interaction.user.tag}`, inline: true }, { name: '안내', value: '아래 버튼을 눌러 수락하거나 거절할 수 있습니다.' })
+          .setTimestamp()],
+        components: [requestButtons],
+      }).catch(() => {});
       return;
     }
     if (interaction.commandName === '친구받기') {

@@ -195,14 +195,14 @@ const guildCommands = [
   new SlashCommandBuilder()
     .setName('관심사')
     .setDescription('관심사 역할을 설정하거나 선택합니다.')
-    .addSubcommand((subcommand) => subcommand.setName('추가').setDescription('관리자가 관심사 역할을 추가합니다.').addRoleOption((option) => option.setName('역할').setDescription('관심사 역할').setRequired(true)).addStringOption((option) => option.setName('이름').setDescription('관심사 이름').setRequired(true)))
-    .addSubcommand((subcommand) => subcommand.setName('선택').setDescription('관심사 역할을 선택합니다.').addRoleOption((option) => option.setName('역할').setDescription('선택할 관심사 역할').setRequired(true)))
-    .addSubcommand((subcommand) => subcommand.setName('해제').setDescription('관심사 역할을 해제합니다.').addRoleOption((option) => option.setName('역할').setDescription('해제할 관심사 역할').setRequired(true)))
+    .addSubcommand((subcommand) => subcommand.setName('설정').setDescription('관리자가 관심사 역할을 연결합니다.').addStringOption((option) => option.setName('관심사').setDescription('관심사').addChoices(...['발로란트', '마인크래프트', '오버워치', '롤', '로블록스', '에니'].map((name) => ({ name, value: name }))).setRequired(true)).addRoleOption((option) => option.setName('역할').setDescription('연결할 역할').setRequired(true)))
+    .addSubcommand((subcommand) => subcommand.setName('선택').setDescription('관심사 역할을 선택합니다.').addStringOption((option) => option.setName('관심사').setDescription('관심사').addChoices(...['발로란트', '마인크래프트', '오버워치', '롤', '로블록스', '에니'].map((name) => ({ name, value: name }))).setRequired(true)))
     .addSubcommand((subcommand) => subcommand.setName('목록').setDescription('관심사 역할 목록을 확인합니다.')),
   new SlashCommandBuilder().setName('친구전송').setDescription('친구 요청을 보냅니다.').addUserOption((option) => option.setName('유저').setDescription('친구 요청 대상').setRequired(true)),
   new SlashCommandBuilder().setName('친구삭제').setDescription('친구를 삭제합니다.').addUserOption((option) => option.setName('유저').setDescription('삭제할 친구').setRequired(true)),
   new SlashCommandBuilder().setName('친구받기').setDescription('받은 친구 요청을 수락합니다.').addUserOption((option) => option.setName('유저').setDescription('요청한 유저').setRequired(true)),
   new SlashCommandBuilder().setName('친구목록').setDescription('친구 목록을 확인합니다.'),
+  new SlashCommandBuilder().setName('친구추천').setDescription('관심사가 같은 친구를 추천받습니다.'),
   new SlashCommandBuilder().setName('친구알림').setDescription('친구 행동 DM 알림을 설정하거나 해제합니다.').addUserOption((option) => option.setName('유저').setDescription('친구').setRequired(true)).addStringOption((option) => option.setName('행동').setDescription('알림 행동').addChoices({ name: '음성 채널 입장', value: 'voice' }, { name: '게임 시작', value: 'game' }).setRequired(true)).addBooleanOption((option) => option.setName('사용').setDescription('알림 사용 여부(생략하면 켜기)')),
   new SlashCommandBuilder().setName('game').setDescription('친구가 특정 게임을 시작할 때 DM 알림을 설정합니다.').addUserOption((option) => option.setName('유저').setDescription('친구').setRequired(true)).addStringOption((option) => option.setName('게임').setDescription('Discord에 표시되는 정확한 게임 이름').setRequired(true)).addBooleanOption((option) => option.setName('사용').setDescription('알림 사용 여부(생략하면 켜기)')),
 ].map((command) => command.toJSON());
