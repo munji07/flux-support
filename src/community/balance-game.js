@@ -14,9 +14,9 @@ function createBalanceGame({ client, readSetting, writeSetting, deleteSetting, g
   }
 
   function getRandomIntervalMs() {
-    // 10분 ~ 30분 무작위 (밀리초)
-    const minMs = 10 * 60 * 1000;
-    const maxMs = 30 * 60 * 1000;
+    // 30분 ~ 60분 무작위 (밀리초)
+    const minMs = 30 * 60 * 1000;
+    const maxMs = 60 * 60 * 1000;
     return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
   }
 

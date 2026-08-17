@@ -1,6 +1,6 @@
 const COMMUNITY_GUILD_ID = '1538513625730383902';
 const QUESTION_CHANNEL_ID = '1538530280137031731';
-const QUESTION_IDLE_MS = 10 * 60 * 1000;
+const QUESTION_IDLE_MS = 60 * 60 * 1000;
 const HF_MODEL = process.env.HF_MODEL || 'Qwen/Qwen3-4B-Instruct-2507';
 
 module.exports = {
