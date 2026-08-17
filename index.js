@@ -15,7 +15,7 @@ const MODERATOR_ROLE_ID = '1538529402256760884';
 const LEVEL_GUILD_ID = '1538513625730383902';
 const SUPPORT_GUILD_ID = '1525458537139146812';
 const QUESTION_CHANNEL_ID = '1538530280137031731';
-const QUESTION_IDLE_MS = 30 * 60 * 1000;
+const QUESTION_IDLE_MS = 10 * 60 * 1000;
 const HF_MODEL = 'Qwen/Qwen3.8-27B';
 const channelConfigPath = path.join(__dirname, 'channel-config.json');
 const sqlitePath = path.join(__dirname, 'progress.db');
@@ -373,6 +373,12 @@ async function sendFriendAlerts(guildId, friendId, action, detail, gameName = nu
 let questionTimer;
 let questionInProgress = false;
 
+function getChatChannelId(guildId) {
+  const configured = readSetting(guildId, 'chat_channel_id');
+  if (configured === 'disabled') return null;
+  return configured || QUESTION_CHANNEL_ID;
+}
+
 async function createQuestion() {
   if (!process.env.HF_TOKEN) throw new Error('HF_TOKEN is not configured');
 
@@ -413,9 +419,12 @@ function scheduleIdleQuestion() {
 
 async function sendIdleQuestion() {
   if (questionInProgress) return;
+  if (!getChatChannelId(LEVEL_GUILD_ID)) return;
   questionInProgress = true;
   try {
-    const channel = await client.channels.fetch(QUESTION_CHANNEL_ID);
+    const channelId = getChatChannelId(LEVEL_GUILD_ID);
+    if (!channelId) return;
+    const channel = await client.channels.fetch(channelId);
     if (!channel?.isTextBased()) return;
     const question = await createQuestion();
     await channel.send(`${question}\n\n답을 작성하거나, 힌트가 필요하면 "힌트 줘"라고 해보세요!`);
@@ -683,7 +692,7 @@ client.once('clientReady', async () => {
 
 client.on('messageCreate', async (message) => {
   if (message.author?.bot) return;
-  if (message.channelId === QUESTION_CHANNEL_ID) scheduleIdleQuestion();
+  if (message.channelId === getChatChannelId(message.guild?.id)) scheduleIdleQuestion();
   if (!message.guild || message.guild.id !== LEVEL_GUILD_ID) return;
   if (!message.content) return;
   if (!message.member) return;
@@ -809,6 +818,25 @@ client.on('interactionCreate', async (interaction) => {
     const result = dbRun('INSERT OR IGNORE INTO attendance (guild_id, user_id, day) VALUES (?, ?, ?)', [interaction.guildId, interaction.user.id, day]);
     const streak = dbGet(`SELECT COUNT(*) AS count FROM attendance WHERE guild_id = ? AND user_id = ? AND day >= date('now', '-30 day')`, [interaction.guildId, interaction.user.id]).count;
     return interaction.reply({ embeds: [communityEmbed(result.changes ? '출석 완료' : '이미 출석함', result.changes ? `최근 30일 출석 **${streak}일**입니다.` : '오늘은 이미 출석했습니다.', result.changes ? 0x57f287 : 0xffc857)], flags: MessageFlags.Ephemeral });
+  }
+
+  if (interaction.commandName === '잡담채널') {
+    if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+      return interaction.reply({ embeds: [errorEmbed('권한 부족', '잡담 채널을 설정하려면 서버 관리 권한이 필요합니다.')], flags: MessageFlags.Ephemeral });
+    }
+    const subcommand = interaction.options.getSubcommand();
+    if (subcommand === '설정') {
+      const channel = interaction.options.getChannel('채널');
+      writeSetting(interaction.guildId, 'chat_channel_id', channel.id);
+      scheduleIdleQuestion();
+      return interaction.reply({ embeds: [communityEmbed('잡담 채널 설정 완료', `${channel}에서 10분 동안 대화가 없으면 AI가 대화 주제를 보냅니다.`, 0x57f287)], flags: MessageFlags.Ephemeral });
+    }
+    if (subcommand === '해제') {
+      writeSetting(interaction.guildId, 'chat_channel_id', 'disabled');
+      clearTimeout(questionTimer);
+      return interaction.reply({ embeds: [communityEmbed('잡담 채널 설정 해제', 'AI 자동 대화 주제 기능을 해제했습니다.', 0xffc857)], flags: MessageFlags.Ephemeral });
+    }
+    return interaction.reply({ embeds: [communityEmbed('현재 잡담 채널', `<#${getChatChannelId(interaction.guildId)}>`, 0x5865f2)], flags: MessageFlags.Ephemeral });
   }
 
   if (interaction.commandName === '주간활동') {

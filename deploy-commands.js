@@ -192,6 +192,10 @@ const guildCommands = [
     .addSubcommand((subcommand) => subcommand.setName('조회').setDescription('제제 알림 채널을 조회합니다.')),
   new SlashCommandBuilder().setName('출석').setDescription('오늘 출석하고 연속 출석을 확인합니다.'),
   new SlashCommandBuilder().setName('주간활동').setDescription('이번 주 활동 랭킹을 확인합니다.'),
+  new SlashCommandBuilder().setName('잡담채널').setDescription('AI가 대화 주제를 던질 잡담 채널을 설정합니다.')
+    .addSubcommand((subcommand) => subcommand.setName('설정').setDescription('잡담 채널을 지정합니다.').addChannelOption((option) => option.setName('채널').setDescription('잡담 채널').addChannelTypes(ChannelType.GuildText).setRequired(true)))
+    .addSubcommand((subcommand) => subcommand.setName('해제').setDescription('잡담 채널 설정을 해제합니다.'))
+    .addSubcommand((subcommand) => subcommand.setName('조회').setDescription('현재 잡담 채널을 확인합니다.')),
   new SlashCommandBuilder()
     .setName('관심사')
     .setDescription('관심사 역할을 설정하거나 선택합니다.')
