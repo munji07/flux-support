@@ -463,9 +463,9 @@ async function awardMessageProgress(member, contentLength) {
 
   await runSql(
     `UPDATE user_progress
-     SET xp = ?, coins = ?, level = ?, messages = ?, last_message_at = ?, last_nickname_change_at = last_nickname_change_at
+     SET xp = ?, coins = coins + ?, level = ?, messages = ?, last_message_at = ?, last_nickname_change_at = last_nickname_change_at
      WHERE guild_id = ? AND user_id = ?`,
-    [user.xp, user.coins, user.level, user.messages, user.last_message_at, member.guild.id, member.id]
+    [user.xp, coinGain, user.level, user.messages, user.last_message_at, member.guild.id, member.id]
   );
 
   if (leveledUp) await applyLevelNickname(member, user.level, settings);
@@ -794,8 +794,8 @@ client.on('interactionCreate', async (interaction) => {
     reward = choice === picked ? ARCADE_BET * 3 : 0;
     result = `🎯 정답: **${choice}**  /  결과: **${picked}**\n${reward ? `⚡ 적중! **+${reward} 코인**` : '🫠 빗나갔어요!'}`;
   }
-  user.coins += reward;
-  await savePlayer(interaction.guildId, interaction.user.id, user);
+  const coinDelta = reward - ARCADE_BET;
+  await runSql('UPDATE user_progress SET coins = MAX(0, coins + ?) WHERE guild_id = ? AND user_id = ?', [coinDelta, interaction.guildId, interaction.user.id]);
   await interaction.editReply(arcadePanel(interaction.user, user.coins, `✨ ${game === 'slots' ? '슬롯 결과' : game === 'dice' ? '주사위 결과' : '코인 러시 결과'}\n\n${result}`));
 });
 
@@ -1022,7 +1022,11 @@ client.on('interactionCreate', async (interaction) => {
     const subcommand = interaction.options.getSubcommand();
     const bet = interaction.options.getInteger('코인');
     const user = await getPlayer(interaction.guildId, interaction.user.id);
-    const safeBet = clamp(bet, 1, Math.max(1, user.coins));
+    const safeBet = clamp(bet, 1, user.coins);
+
+    if (user.coins < 1) {
+      return interaction.reply({ content: '肄붿씤??遺議깊빀?덈떎.', flags: MessageFlags.Ephemeral });
+    }
 
     if (['슬롯', '복권'].includes(subcommand) && safeBet > user.coins) {
       return interaction.reply({ content: '코인이 부족합니다.', flags: MessageFlags.Ephemeral });
