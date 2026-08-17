@@ -21,38 +21,54 @@ function createBalanceGame({ client, readSetting, writeSetting, deleteSetting, g
   }
 
   async function generateBalanceQuestion() {
-    if (!process.env.HF_TOKEN) throw new Error('HF_TOKEN is not configured');
-    const response = await fetch('https://router.huggingface.co/v1/chat/completions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${process.env.HF_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: 'system',
-            content:
-              '너는 딜레마와 흥미진진한 선택지를 만드는 밸런스 게임 전문 AI다. 다음 형식의 JSON만 정확히 출력해라: {"title": "주제 또는 설명", "optionA": "선택지 A", "optionB": "선택지 B"}. 마크다운, 코드블록(```json 등)이나 불필요한 설명은 포함하지 마라.',
-          },
-          {
-            role: 'user',
-            content:
-              '일상, 초능력, 음주/음식, 연애, 직장/학교, 재밌는 딜레마 중 무작위 주제로 당장 선택하기 극도로 까다롭고 신선한 밸런스 게임 1개를 JSON으로 만들어라.',
-          },
-        ],
-        max_tokens: 150,
-        temperature: 0.95,
-      }),
-    });
-    if (!response.ok) {
-      const details = await response.text();
-      throw new Error(`Hugging Face request failed: ${response.status} ${details.slice(0, 500)}`);
-    }
-    const data = await response.json();
-    const rawText = data.choices?.[0]?.message?.content?.trim() || '';
-    
-    // JSON 추출
-    const cleanText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+    const fallbacks = [
+      { title: '⚖️ 평생 하나만 골라야 한다면?', optionA: '평생 치킨 못 먹기', optionB: '평생 피자 못 먹기' },
+      { title: '⚖️ 초능력을 가질 수 있다면?', optionA: '투명인간 되기 (옷 제외)', optionB: '시간을 5초 전으로 되돌리기' },
+      { title: '⚖️ 극악의 밸런스 게임!', optionA: '여름에 히터 틀기', optionB: '겨울에 에어컨 틀기' },
+      { title: '⚖️ 직장 / 학교 딜레마', optionA: '일/공부 하나도 안 하고 칭찬받기', optionB: '열심히 하고 욕먹기' },
+      { title: '⚖️ 연애 딜레마', optionA: '내 과거 다 아는 연인', optionB: '자기 과거 절대 안 밝히는 연인' },
+      { title: '⚖️ 스마트폰 딜레마', optionA: '평생 데이터 1Mbps만 사용', optionB: '평생 배터리 최대 20%만 유지' },
+    ];
+
     try {
+      if (!process.env.HF_TOKEN) throw new Error('HF_TOKEN is not configured');
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      const response = await fetch('https://router.huggingface.co/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${process.env.HF_TOKEN}`, 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: 'system',
+              content:
+                '너는 딜레마와 흥미진진한 선택지를 만드는 밸런스 게임 전문 AI다. 다음 형식의 JSON만 정확히 출력해라: {"title": "주제 또는 설명", "optionA": "선택지 A", "optionB": "선택지 B"}. 마크다운, 코드블록(```json 등)이나 불필요한 설명은 포함하지 마라.',
+            },
+            {
+              role: 'user',
+              content:
+                '일상, 초능력, 음주/음식, 연애, 직장/학교, 재밌는 딜레마 중 무작위 주제로 당장 선택하기 극도로 까다롭고 신선한 밸런스 게임 1개를 JSON으로 만들어라.',
+            },
+          ],
+          max_tokens: 150,
+          temperature: 0.95,
+        }),
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const details = await response.text();
+        throw new Error(`Hugging Face request failed: ${response.status} ${details.slice(0, 500)}`);
+      }
+      const data = await response.json();
+      const rawText = data.choices?.[0]?.message?.content?.trim() || '';
+      
+      // JSON 추출
+      const cleanText = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
       const parsed = JSON.parse(cleanText);
       if (parsed.optionA && parsed.optionB) {
         return {
@@ -61,14 +77,11 @@ function createBalanceGame({ client, readSetting, writeSetting, deleteSetting, g
           optionB: parsed.optionB,
         };
       }
-    } catch {}
+    } catch (error) {
+      console.warn('[BalanceGame] AI 질문 생성 실패 (네트워크 타임아웃 또는 파싱 실패), 템플릿 질문을 사용합니다:', error.message);
+    }
 
-    // 기본 예비 질문 (AI 파싱 실패 시)
-    const fallbacks = [
-      { title: '⚖️ 평생 하나만 골라야 한다면?', optionA: '평생 치킨 못 먹기', optionB: '평생 피자 못 먹기' },
-      { title: '⚖️ 초능력을 가질 수 있다면?', optionA: '투명인간 되기 (옷 제외)', optionB: '시간을 5초 전으로 되돌리기' },
-      { title: '⚖️ 극악의 밸런스 게임!', optionA: '여름에 히터 틀기', optionB: '겨울에 에어컨 틀기' },
-    ];
+    // 기본 예비 질문 (AI 타임아웃/오류 발생 시)
     return fallbacks[Math.floor(Math.random() * fallbacks.length)];
   }
 
