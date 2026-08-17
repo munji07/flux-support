@@ -5,6 +5,7 @@ const path = require('path');
 const { handleSupportInteraction } = require('./src/support/commands.js');
 const { COMMUNITY_GUILD_ID, QUESTION_CHANNEL_ID, QUESTION_IDLE_MS, HF_MODEL } = require('./src/community');
 const { createIdleChat } = require('./src/community/idle-chat');
+const { createBalanceGame } = require('./src/community/balance-game');
 const { isCommunityCommand } = require('./src/community/commands');
 const {
   sqlite,
@@ -75,6 +76,15 @@ const idleChat = createIdleChat({
   guildId: LEVEL_GUILD_ID,
   fallbackChannelId: QUESTION_CHANNEL_ID,
   idleMs: QUESTION_IDLE_MS,
+  model: HF_MODEL,
+});
+
+const balanceGame = createBalanceGame({
+  client,
+  readSetting,
+  writeSetting,
+  deleteSetting,
+  guildId: LEVEL_GUILD_ID,
   model: HF_MODEL,
 });
 
@@ -643,6 +653,7 @@ client.once('clientReady', async () => {
   }
 
   idleChat.schedule();
+  balanceGame.schedule();
 });
 
 client.on('error', (error) => {
@@ -695,6 +706,7 @@ function arcadePanel(user, coins, title = '🎰 FLUX 도파민 아케이드') {
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
+  if (await balanceGame.handleButtonInteraction(interaction)) return;
   if (interaction.customId.startsWith('friend:')) {
     const [, action, guildId, requesterId, targetId] = interaction.customId.split(':');
     if (interaction.user.id !== targetId) {
@@ -802,6 +814,39 @@ client.on('interactionCreate', async (interaction) => {
     return interaction.reply({ embeds: [communityEmbed('현재 잡담 채널', `<#${idleChat.getChannelId()}>`, 0x5865f2)], flags: MessageFlags.Ephemeral });
   }
 
+  if (interaction.commandName === '밸런스게임') {
+    const subcommand = interaction.options.getSubcommand();
+    if (subcommand === '채널설정') {
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+        return interaction.reply({ embeds: [errorEmbed('권한 부족', '채널을 설정하려면 서버 관리 권한이 필요합니다.')], flags: MessageFlags.Ephemeral });
+      }
+      const channel = interaction.options.getChannel('채널');
+      writeSetting(interaction.guildId, 'balance_game_channel_id', channel.id);
+      balanceGame.schedule();
+      return interaction.reply({ embeds: [communityEmbed('⚖️ 밸런스 게임 채널 설정 완료', `${channel} 채널에 10분~30분 간격 무작위로 밸런스 게임이 올려집니다.`, 0x57f287)], flags: MessageFlags.Ephemeral });
+    }
+    if (subcommand === '채널해제') {
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+        return interaction.reply({ embeds: [errorEmbed('권한 부족', '채널 설정을 해제하려면 서버 관리 권한이 필요합니다.')], flags: MessageFlags.Ephemeral });
+      }
+      writeSetting(interaction.guildId, 'balance_game_channel_id', 'disabled');
+      balanceGame.schedule();
+      return interaction.reply({ embeds: [communityEmbed('⚖️ 밸런스 게임 채널 설정 해제', '자동 밸런스 게임 기능을 해제했습니다.', 0xffc857)], flags: MessageFlags.Ephemeral });
+    }
+    if (subcommand === '조회') {
+      const channelId = balanceGame.getChannelId();
+      return interaction.reply({ embeds: [communityEmbed('⚖️ 현재 밸런스 게임 채널', channelId ? `<#${channelId}>` : '설정된 채널이 없습니다.', 0x5865f2)], flags: MessageFlags.Ephemeral });
+    }
+    if (subcommand === '즉시실행') {
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+        return interaction.reply({ embeds: [errorEmbed('권한 부족', '즉시 실행하려면 서버 관리 권한이 필요합니다.')], flags: MessageFlags.Ephemeral });
+      }
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      await balanceGame.sendBalanceGame();
+      return interaction.editReply({ embeds: [communityEmbed('⚖️ 밸런스 게임 전송 완료', '설정된 채널에 밸런스 게임을 전송했습니다.', 0x57f287)] });
+    }
+  }
+
   if (interaction.commandName === '주간활동') {
     const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const rows = dbAll(`SELECT user_id, COUNT(*) AS count FROM activity_log WHERE guild_id = ? AND created_at >= ? GROUP BY user_id ORDER BY count DESC LIMIT 10`, [interaction.guildId, since]);
@@ -821,10 +866,14 @@ client.on('interactionCreate', async (interaction) => {
       const rows = dbAll('SELECT role_id, label FROM interest_roles WHERE guild_id = ?', [interaction.guildId]);
       return interaction.reply({ embeds: [communityEmbed('관심사 목록', rows.length ? rows.map((row) => `- **${row.label}**: <@&${row.role_id}>`).join('\n') : '등록된 관심사 역할이 없습니다.')], flags: MessageFlags.Ephemeral });
     }
-    const mapping = dbGet('SELECT role_id FROM interest_roles WHERE guild_id = ? AND label = ?', [interaction.guildId, interest]);
+const mapping = dbGet('SELECT role_id FROM interest_roles WHERE guild_id = ? AND label = ?', [interaction.guildId, interest]);
     if (!mapping) return interaction.reply({ content: '해당 관심사 역할이 아직 관리자에 의해 설정되지 않았습니다.', flags: MessageFlags.Ephemeral });
     const role = interaction.guild.roles.cache.get(mapping.role_id);
     if (!role) return interaction.reply({ content: '연결된 역할을 찾을 수 없습니다.', flags: MessageFlags.Ephemeral });
+    if (subcommand === '제거') {
+      await interaction.member.roles.remove(role);
+      return interaction.reply({ content: `${role} 역할을 제거했습니다.`, flags: MessageFlags.Ephemeral });
+    }
     await interaction.member.roles.add(role);
     return interaction.reply({ content: `${role} 역할을 추가했습니다.`, flags: MessageFlags.Ephemeral });
   }

@@ -18,6 +18,7 @@ const COMMUNITY_COMMANDS = new Set([
   '미니게임',
   '경험치',
   '등급역할',
+  '밸런스게임',
 ]);
 
 function isCommunityCommand(commandName) {
