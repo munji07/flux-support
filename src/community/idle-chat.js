@@ -16,10 +16,18 @@ function createIdleChat({ client, readSetting, guildId, fallbackChannelId, idleM
       body: JSON.stringify({
         model,
         messages: [
-          { role: 'system', content: '너는 친목 디스코드에서 먼저 말을 거는 유저다. 사람들이 답하기 쉬운 짧고 자연스러운 한국어 질문 하나만 작성해라. 설명이나 해시태그는 붙이지 마라.' },
-          { role: 'user', content: '대화가 끊긴 채팅방에서 일상, 취미, 게임, 음식 중 하나를 주제로 질문을 만들어라.' },
+          {
+            role: 'system',
+            content:
+              '너는 디스코드 친목 채널에서 사람들과 자연스럽게 스몰토크를 시작하는 정답고 예의 바른 한국인 봇이다. 너무 짧지 않게 2~3문장 정도로 구체적인 상황이나 본인 의견을 곁들여 다른 유저들이 자연스럽게 경험이나 생각을 이어서 댓글 달기 좋은 질문을 존댓말(~해요, ~인가요?, ~ 있으신가요?)로 작성해라. 불필요한 인사말, 해시태그, 인용부호는 제외하고 질문 내용만 출력해라.',
+          },
+          {
+            role: 'user',
+            content:
+              '일상, 음식/맛집, 추천 영화/드라마/음악, 주말 계획, 최신 게임, 취미 생활 중 하나의 주제로 대화를 유도하는 친근한 질문 1개를 만들어주세요.',
+          },
         ],
-        max_tokens: 100,
+        max_tokens: 150,
         temperature: 0.9,
       }),
     });
@@ -40,7 +48,7 @@ function createIdleChat({ client, readSetting, guildId, fallbackChannelId, idleM
       const channel = await client.channels.fetch(getChannelId());
       if (!channel?.isTextBased()) return;
       const question = await createQuestion();
-      await channel.send(`${question}\n\n답을 작성하거나, 힌트가 필요하면 "힌트 줘"라고 해보세요!`);
+      await channel.send(`💬 **[오늘의 대화 주제]**\n${question}`);
     } catch (error) {
       console.error('Idle question error:', error);
     } finally {
