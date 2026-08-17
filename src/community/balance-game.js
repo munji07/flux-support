@@ -35,7 +35,7 @@ function createBalanceGame({ client, readSetting, writeSetting, deleteSetting, g
       if (!process.env.HF_TOKEN) throw new Error('HF_TOKEN is not configured');
       
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
 
       const response = await fetch('https://router.huggingface.co/v1/chat/completions', {
         method: 'POST',
@@ -79,7 +79,9 @@ function createBalanceGame({ client, readSetting, writeSetting, deleteSetting, g
         };
       }
     } catch (error) {
-      console.warn('[BalanceGame] AI 질문 생성 실패 (네트워크 타임아웃 또는 파싱 실패), 템플릿 질문을 사용합니다:', error.message);
+      if (error.name !== 'AbortError') {
+        console.warn('[BalanceGame] AI 질문 생성 실패, 템플릿 질문을 사용합니다:', error.message);
+      }
     }
 
     // 기본 예비 질문 (AI 타임아웃/오류 발생 시)
