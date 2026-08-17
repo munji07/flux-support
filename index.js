@@ -158,6 +158,80 @@ async function updateWarning(guildId, userId, delta, reason) {
   return nextCount;
 }
 
+function getPenaltyChannelId(guildId) {
+  return readSetting(guildId, 'penalty_channel_id') || '';
+}
+
+function setPenaltyChannelId(guildId, channelId) {
+  if (channelId) writeSetting(guildId, 'penalty_channel_id', channelId);
+  else deleteSetting(guildId, 'penalty_channel_id');
+}
+
+function warningPunishmentFor(count) {
+  if (count >= 6) return { type: 'ban' };
+  if (count === 5) return { type: 'kick' };
+  if (count === 4) return { type: 'timeout', ms: 24 * 60 * 60 * 1000 };
+  if (count === 3) return { type: 'timeout', ms: 60 * 60 * 1000 };
+  if (count === 2) return { type: 'timeout', ms: 10 * 60 * 1000 };
+  return null;
+}
+
+function punishmentLabel(punishment) {
+  if (!punishment?.type) return '조치 없음';
+  if (punishment.type === 'timeout') return `타임아웃 ${punishment.minutes}분`;
+  if (punishment.type === 'kick') return '추방';
+  if (punishment.type === 'ban') return '서버 밴';
+  return '없음';
+}
+
+async function applyWarningPunishment(guild, member, count, reason) {
+  const punishment = warningPunishmentFor(count);
+  if (!punishment) return { type: null, applied: false };
+
+  const botMember = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
+  if (punishment.type === 'timeout') {
+    if (!botMember?.permissions.has(PermissionsBitField.Flags.ModerateMembers)) {
+      return { ...punishment, minutes: punishment.ms / 60000, applied: false, error: '봇에 Moderate Members 권한이 없습니다.' };
+    }
+    await member.timeout(punishment.ms, reason);
+    return { ...punishment, minutes: punishment.ms / 60000, applied: true };
+  }
+  if (punishment.type === 'kick') {
+    if (!botMember?.permissions.has(PermissionsBitField.Flags.KickMembers)) {
+      return { ...punishment, applied: false, error: '봇에 Kick Members 권한이 없습니다.' };
+    }
+    await member.kick(reason);
+    return { ...punishment, applied: true };
+  }
+  if (punishment.type === 'ban') {
+    if (!botMember?.permissions.has(PermissionsBitField.Flags.BanMembers)) {
+      return { ...punishment, applied: false, error: '봇에 Ban Members 권한이 없습니다.' };
+    }
+    await member.ban({ reason });
+    return { ...punishment, applied: true };
+  }
+  return { ...punishment, applied: false };
+}
+
+async function sendPenaltyNotification(guild, target, count, punishment, reason) {
+  const channelId = getPenaltyChannelId(guild.id);
+  if (!channelId) return;
+  const channel = guild.channels.cache.get(channelId);
+  if (!channel) return;
+
+  const embed = new EmbedBuilder()
+    .setColor(punishment?.type ? 0xed4245 : 0xffc857)
+    .setTitle(punishment?.type ? '⚠️ 경고 누적 제제' : '⚠️ 경고 부여')
+    .setDescription(`${target} 님에게 경고가 부여되었습니다.`)
+    .addFields(
+      { name: '경고 횟수', value: `${count}회`, inline: true },
+      { name: '적용 제제', value: punishmentLabel(punishment), inline: true },
+      { name: '사유', value: reason || '사유 없음', inline: false }
+    )
+    .setTimestamp();
+  await channel.send({ embeds: [embed] }).catch(() => {});
+}
+
 async function initSqlite() {
   await runSql(`
     CREATE TABLE IF NOT EXISTS level_settings (
@@ -916,9 +990,30 @@ client.on('interactionCreate', async (interaction) => {
 
   if (interaction.commandName === '경고' || interaction.commandName === '추방' || interaction.commandName === '타임아웃') {
     if (!interaction.guild) return interaction.reply({ embeds: [errorEmbed('사용 불가', '서버에서만 사용할 수 있습니다.')], flags: MessageFlags.Ephemeral });
-    if (!hasModeratorRole(interaction.member)) {
+    if (interaction.user.id !== ADMIN_USER_ID && !hasModeratorRole(interaction.member)) {
       return interaction.reply({ embeds: [errorEmbed('권한 부족', '이 명령어는 지정한 역할을 가진 유저만 사용할 수 있습니다.')], flags: MessageFlags.Ephemeral });
     }
+  }
+
+  if (interaction.commandName === '제제채널') {
+    if (interaction.user.id !== ADMIN_USER_ID && !hasModeratorRole(interaction.member)) {
+      return interaction.reply({ embeds: [errorEmbed('권한 부족', '관리자만 사용할 수 있는 명령어입니다.')], flags: MessageFlags.Ephemeral });
+    }
+    if (!interaction.guild) {
+      return interaction.reply({ embeds: [errorEmbed('사용 불가', '서버에서만 사용할 수 있습니다.')], flags: MessageFlags.Ephemeral });
+    }
+    const subcommand = interaction.options.getSubcommand();
+    if (subcommand === '설정') {
+      const channel = interaction.options.getChannel('채널');
+      setPenaltyChannelId(interaction.guildId, channel.id);
+      return interaction.reply({ embeds: [successEmbed('제제 알림 채널 설정', `${channel} 채널로 제제 알림을 보냅니다.`)], flags: MessageFlags.Ephemeral });
+    }
+    if (subcommand === '제거') {
+      setPenaltyChannelId(interaction.guildId, '');
+      return interaction.reply({ embeds: [successEmbed('제제 알림 채널 제거', '제제 알림 채널을 제거했습니다.')], flags: MessageFlags.Ephemeral });
+    }
+    const channelId = getPenaltyChannelId(interaction.guildId);
+    return interaction.reply({ embeds: [successEmbed('제제 알림 채널 조회', channelId ? `현재 제제 알림 채널: <#${channelId}>` : '설정되어 있지 않습니다.')], flags: MessageFlags.Ephemeral });
   }
 
   if (interaction.commandName === '경고') {
@@ -927,8 +1022,22 @@ client.on('interactionCreate', async (interaction) => {
     const reason = interaction.options.getString('사유');
     const delta = action === '추가' ? 1 : -1;
     const nextCount = await updateWarning(interaction.guildId, target.id, delta, reason);
+
+    let penaltyLine = '';
+    if (action === '추가') {
+      const member = await interaction.guild.members.fetch(target.id).catch(() => null);
+      if (member) {
+        const punishment = await applyWarningPunishment(interaction.guild, member, nextCount, reason);
+        await sendPenaltyNotification(interaction.guild, target, nextCount, punishment, reason);
+        penaltyLine = punishment.applied
+          ? `\n**적용 제제**: ${punishmentLabel(punishment)}`
+          : punishment.error
+            ? `\n**제제 실패**: ${punishment.error}`
+            : '';
+      }
+    }
     return interaction.reply({
-      embeds: [successEmbed('경고 처리', `${target}의 경고를 ${action === '추가' ? '추가' : '감소'}했습니다.\n**현재 경고 수**: ${nextCount}\n**사유**: ${reason}`)],
+      embeds: [successEmbed('경고 처리', `${target}의 경고를 ${action === '추가' ? '추가' : '감소'}했습니다.\n**현재 경고 수**: ${nextCount}\n**사유**: ${reason}${penaltyLine}`)],
       flags: MessageFlags.Ephemeral,
     });
   }

@@ -177,6 +177,19 @@ const guildCommands = [
     .addUserOption((option) => option.setName('유저').setDescription('대상 유저').setRequired(true))
     .addIntegerOption((option) => option.setName('시간').setDescription('타임아웃 시간(분)').setMinValue(1).setRequired(true))
     .addStringOption((option) => option.setName('이유').setDescription('타임아웃 이유').setRequired(true)),
+  new SlashCommandBuilder()
+    .setName('제제채널')
+    .setDescription('경고 누적 제제 알림 채널을 관리합니다.')
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName('설정')
+        .setDescription('제제 알림 채널을 설정합니다.')
+        .addChannelOption((option) =>
+          option.setName('채널').setDescription('제제 알림을 보낼 텍스트 채널').addChannelTypes(ChannelType.GuildText).setRequired(true)
+        )
+    )
+    .addSubcommand((subcommand) => subcommand.setName('제거').setDescription('제제 알림 채널을 제거합니다.'))
+    .addSubcommand((subcommand) => subcommand.setName('조회').setDescription('제제 알림 채널을 조회합니다.')),
 ].map((command) => command.toJSON());
 
 const supportCommandNames = new Set(['랭킹채널', '후원금액']);
