@@ -7,13 +7,16 @@ const { handleSupportInteraction } = require('./support.js');
 require('dotenv').config({ path: '.env' });
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildPresences],
 });
 
 const ADMIN_USER_ID = '1269575955626725390';
 const MODERATOR_ROLE_ID = '1538529402256760884';
 const LEVEL_GUILD_ID = '1538513625730383902';
 const SUPPORT_GUILD_ID = '1525458537139146812';
+const QUESTION_CHANNEL_ID = '1538530280137031731';
+const QUESTION_IDLE_MS = 30 * 60 * 1000;
+const HF_MODEL = 'Qwen/Qwen3.8-27B';
 const channelConfigPath = path.join(__dirname, 'channel-config.json');
 const sqlitePath = path.join(__dirname, 'progress.db');
 
@@ -283,6 +286,11 @@ async function initSqlite() {
       PRIMARY KEY (guild_id, user_id)
     )
   `);
+  await runSql(`CREATE TABLE IF NOT EXISTS attendance (guild_id TEXT NOT NULL, user_id TEXT NOT NULL, day TEXT NOT NULL, PRIMARY KEY (guild_id, user_id, day))`);
+  await runSql(`CREATE TABLE IF NOT EXISTS activity_log (guild_id TEXT NOT NULL, user_id TEXT NOT NULL, created_at INTEGER NOT NULL)`);
+  await runSql(`CREATE TABLE IF NOT EXISTS interest_roles (guild_id TEXT NOT NULL, role_id TEXT NOT NULL, label TEXT NOT NULL, PRIMARY KEY (guild_id, role_id))`);
+  await runSql(`CREATE TABLE IF NOT EXISTS friend_requests (guild_id TEXT NOT NULL, requester_id TEXT NOT NULL, target_id TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (guild_id, requester_id, target_id))`);
+  await runSql(`CREATE TABLE IF NOT EXISTS friend_alerts (guild_id TEXT NOT NULL, user_id TEXT NOT NULL, friend_id TEXT NOT NULL, action TEXT NOT NULL, PRIMARY KEY (guild_id, user_id, friend_id, action))`);
 
   const legacy = loadChannelConfig();
   if (legacy.global?.welcomeChannelId) {
@@ -335,6 +343,79 @@ function stripLevelPrefix(nickname) {
 
 function buildPrefixedNickname(level, nickname) {
   return normalizeNicknamePrefix(nickname, level).slice(0, 32);
+}
+
+function isFriend(guildId, userId, friendId) {
+  return Boolean(dbGet(`SELECT 1 FROM friend_requests WHERE guild_id = ? AND status = 'accepted' AND ((requester_id = ? AND target_id = ?) OR (requester_id = ? AND target_id = ?))`, [guildId, userId, friendId, friendId, userId]));
+}
+
+function friendIds(guildId, userId) {
+  return dbAll(`SELECT CASE WHEN requester_id = ? THEN target_id ELSE requester_id END AS user_id FROM friend_requests WHERE guild_id = ? AND status = 'accepted' AND (requester_id = ? OR target_id = ?)`, [userId, guildId, userId, userId]).map((row) => row.user_id);
+}
+
+async function sendFriendAlerts(guildId, friendId, action, detail) {
+  const rows = dbAll('SELECT user_id FROM friend_alerts WHERE guild_id = ? AND friend_id = ? AND action = ?', [guildId, friendId, action]);
+  for (const row of rows) {
+    const user = await client.users.fetch(row.user_id).catch(() => null);
+    await user?.send(`친구 알림: <@${friendId}>님이 ${detail}`).catch(() => {});
+  }
+}
+
+let questionTimer;
+let questionInProgress = false;
+
+async function createQuestion() {
+  if (!process.env.HF_TOKEN) throw new Error('HF_TOKEN is not configured');
+
+  const response = await fetch('https://router.huggingface.co/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.HF_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: HF_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content: '너는 디스코드 채팅방에서 먼저 말을 거는 친근한 한국인 유저다. 사람들이 답하기 쉬운 짧고 흥미로운 질문 하나만 만들어라. 질문 앞뒤에 설명, 인용부호, 해시태그를 붙이지 마라.',
+        },
+        {
+          role: 'user',
+          content: '지금 대화가 끊겼다. 일상, 취미, 게임, 음식, 상상력을 주제로 자연스러운 질문 하나를 작성해라.',
+        },
+      ],
+      max_tokens: 100,
+      temperature: 0.9,
+    }),
+  });
+
+  if (!response.ok) throw new Error(`Hugging Face request failed: ${response.status}`);
+  const data = await response.json();
+  const text = data.choices?.[0]?.message?.content?.trim();
+  if (!text) throw new Error('Hugging Face returned an empty question');
+  return text.replace(/^['"“”]+|['"“”]+$/g, '').trim();
+}
+
+function scheduleIdleQuestion() {
+  clearTimeout(questionTimer);
+  questionTimer = setTimeout(sendIdleQuestion, QUESTION_IDLE_MS);
+}
+
+async function sendIdleQuestion() {
+  if (questionInProgress) return;
+  questionInProgress = true;
+  try {
+    const channel = await client.channels.fetch(QUESTION_CHANNEL_ID);
+    if (!channel?.isTextBased()) return;
+    const question = await createQuestion();
+    await channel.send(`${question}\n\n답을 작성하거나, 힌트가 필요하면 "힌트 줘"라고 해보세요!`);
+  } catch (error) {
+    console.error('Idle question error:', error);
+  } finally {
+    questionInProgress = false;
+    scheduleIdleQuestion();
+  }
 }
 
 async function applyLevelNickname(member, level, settings) {
@@ -587,15 +668,32 @@ client.once('clientReady', async () => {
     await db.query('ALTER TABLE user_subscriptions ADD COLUMN IF NOT EXISTS donation_amount INTEGER NOT NULL DEFAULT 0').catch(console.error);
     await db.query('CREATE TABLE IF NOT EXISTS donation_ranking_channels (guild_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, message_id TEXT NOT NULL)').catch(console.error);
   }
+
+  scheduleIdleQuestion();
 });
 
 client.on('messageCreate', async (message) => {
+  if (message.author?.bot) return;
+  if (message.channelId === QUESTION_CHANNEL_ID) scheduleIdleQuestion();
   if (!message.guild || message.guild.id !== LEVEL_GUILD_ID) return;
-  if (!message.author || message.author.bot) return;
   if (!message.content) return;
   if (!message.member) return;
 
+  await runSql('INSERT INTO activity_log (guild_id, user_id, created_at) VALUES (?, ?, ?)', [message.guild.id, message.author.id, Date.now()]).catch(() => {});
   await awardMessageProgress(message.member, message.content.length).catch(console.error);
+});
+
+client.on('voiceStateUpdate', async (oldState, newState) => {
+  if (!newState.guild || newState.member?.user?.bot || oldState.channelId || !newState.channelId) return;
+  await sendFriendAlerts(newState.guild.id, newState.member.id, 'voice', `음성 채널 **${newState.channel?.name || '알 수 없는 채널'}**에 들어왔습니다.`);
+});
+
+client.on('presenceUpdate', async (oldPresence, newPresence) => {
+  if (!newPresence?.guild || newPresence.user?.bot) return;
+  const oldGames = new Set((oldPresence?.activities || []).filter((activity) => activity.type === 0).map((activity) => activity.name));
+  for (const activity of (newPresence.activities || []).filter((item) => item.type === 0 && !oldGames.has(item.name))) {
+    await sendFriendAlerts(newPresence.guild.id, newPresence.userId, 'game', `**${activity.name}** 게임을 시작했습니다.`);
+  }
 });
 
 const ARCADE_BET = 5;
@@ -666,6 +764,70 @@ client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   if (await handleSupportInteraction(interaction, db)) return;
+
+  if (interaction.commandName === '출석') {
+    const day = new Date().toISOString().slice(0, 10);
+    const result = dbRun('INSERT OR IGNORE INTO attendance (guild_id, user_id, day) VALUES (?, ?, ?)', [interaction.guildId, interaction.user.id, day]);
+    const streak = dbGet(`SELECT COUNT(*) AS count FROM attendance WHERE guild_id = ? AND user_id = ? AND day >= date('now', '-30 day')`, [interaction.guildId, interaction.user.id]).count;
+    return interaction.reply({ content: result.changes ? `출석 완료! 최근 30일 출석 **${streak}일**입니다.` : '오늘은 이미 출석했습니다.', flags: MessageFlags.Ephemeral });
+  }
+
+  if (interaction.commandName === '주간활동') {
+    const since = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const rows = dbAll(`SELECT user_id, COUNT(*) AS count FROM activity_log WHERE guild_id = ? AND created_at >= ? GROUP BY user_id ORDER BY count DESC LIMIT 10`, [interaction.guildId, since]);
+    return interaction.reply({ content: rows.length ? `**주간 활동 랭킹**\n${rows.map((row, index) => `${index + 1}. <@${row.user_id}> — ${row.count}회`).join('\n')}` : '아직 이번 주 활동 기록이 없습니다.' });
+  }
+
+  if (interaction.commandName === '관심사') {
+    const subcommand = interaction.options.getSubcommand();
+    const role = interaction.options.getRole('역할');
+    if (subcommand === '추가') {
+      if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageRoles)) return interaction.reply({ content: '역할을 관리할 권한이 필요합니다.', flags: MessageFlags.Ephemeral });
+      dbRun('INSERT OR REPLACE INTO interest_roles (guild_id, role_id, label) VALUES (?, ?, ?)', [interaction.guildId, role.id, interaction.options.getString('이름')]);
+      return interaction.reply({ content: `${role} 관심사 역할을 등록했습니다.`, flags: MessageFlags.Ephemeral });
+    }
+    if (subcommand === '목록') {
+      const rows = dbAll('SELECT role_id, label FROM interest_roles WHERE guild_id = ?', [interaction.guildId]);
+      return interaction.reply({ content: rows.length ? rows.map((row) => `- ${row.label}: <@&${row.role_id}>`).join('\n') : '등록된 관심사 역할이 없습니다.', flags: MessageFlags.Ephemeral });
+    }
+    if (!dbGet('SELECT 1 FROM interest_roles WHERE guild_id = ? AND role_id = ?', [interaction.guildId, role.id])) return interaction.reply({ content: '등록되지 않은 관심사 역할입니다.', flags: MessageFlags.Ephemeral });
+    if (subcommand === '선택') await interaction.member.roles.add(role);
+    else await interaction.member.roles.remove(role);
+    return interaction.reply({ content: subcommand === '선택' ? `${role} 역할을 추가했습니다.` : `${role} 역할을 해제했습니다.`, flags: MessageFlags.Ephemeral });
+  }
+
+  if (['친구전송', '친구삭제', '친구받기', '친구목록', '친구알림'].includes(interaction.commandName)) {
+    const guildId = interaction.guildId;
+    const userId = interaction.user.id;
+    const target = interaction.options.getUser('유저');
+    if (target?.bot || target?.id === userId) return interaction.reply({ content: '봇이나 자기 자신은 친구로 등록할 수 없습니다.', flags: MessageFlags.Ephemeral });
+    if (interaction.commandName === '친구전송') {
+      dbRun(`INSERT OR REPLACE INTO friend_requests (guild_id, requester_id, target_id, status, created_at) VALUES (?, ?, ?, 'pending', ?)`, [guildId, userId, target.id, Date.now()]);
+      await target.send(`<@${userId}>님이 친구 요청을 보냈습니다. 서버에서 \/친구받기 유저:${interaction.user.username} 으로 수락할 수 있습니다.`).catch(() => {});
+      return interaction.reply({ content: `${target}님에게 친구 요청을 보냈습니다.`, flags: MessageFlags.Ephemeral });
+    }
+    if (interaction.commandName === '친구받기') {
+      const request = dbGet(`SELECT 1 FROM friend_requests WHERE guild_id = ? AND requester_id = ? AND target_id = ? AND status = 'pending'`, [guildId, target.id, userId]);
+      if (!request) return interaction.reply({ content: '받은 친구 요청이 없습니다.', flags: MessageFlags.Ephemeral });
+      dbRun(`UPDATE friend_requests SET status = 'accepted' WHERE guild_id = ? AND requester_id = ? AND target_id = ?`, [guildId, target.id, userId]);
+      return interaction.reply({ content: `${target}님과 친구가 되었습니다.`, flags: MessageFlags.Ephemeral });
+    }
+    if (interaction.commandName === '친구삭제') {
+      dbRun(`DELETE FROM friend_requests WHERE guild_id = ? AND status = 'accepted' AND ((requester_id = ? AND target_id = ?) OR (requester_id = ? AND target_id = ?))`, [guildId, userId, target.id, target.id, userId]);
+      dbRun('DELETE FROM friend_alerts WHERE guild_id = ? AND (user_id = ? OR friend_id = ?)', [guildId, userId, target.id]);
+      return interaction.reply({ content: `${target}님을 친구 목록에서 삭제했습니다.`, flags: MessageFlags.Ephemeral });
+    }
+    if (interaction.commandName === '친구목록') {
+      const ids = friendIds(guildId, userId);
+      return interaction.reply({ content: ids.length ? `친구 목록\n${ids.map((id) => `<@${id}>`).join('\n')}` : '친구가 없습니다.', flags: MessageFlags.Ephemeral });
+    }
+    if (!isFriend(guildId, userId, target.id)) return interaction.reply({ content: '친구로 등록된 유저만 알림을 설정할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    const action = interaction.options.getString('행동');
+    const enabled = interaction.options.getBoolean('사용') ?? true;
+    if (enabled) dbRun('INSERT OR REPLACE INTO friend_alerts (guild_id, user_id, friend_id, action) VALUES (?, ?, ?, ?)', [guildId, userId, target.id, action]);
+    else dbRun('DELETE FROM friend_alerts WHERE guild_id = ? AND user_id = ? AND friend_id = ? AND action = ?', [guildId, userId, target.id, action]);
+    return interaction.reply({ content: `${target}님의 ${action === 'voice' ? '음성 채널 입장' : '게임 시작'} 알림을 ${enabled ? '켰습니다' : '껐습니다'}.`, flags: MessageFlags.Ephemeral });
+  }
 
   if (interaction.commandName === 'arcade') {
     if (interaction.guildId !== LEVEL_GUILD_ID) {
