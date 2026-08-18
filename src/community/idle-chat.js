@@ -1,6 +1,13 @@
-function createIdleChat({ client, readSetting, guildId, fallbackChannelId, idleMs, model }) {
+function createIdleChat({ client, readSetting, guildId, fallbackChannelId, model }) {
   let timer;
   let inProgress = false;
+  let recentMessageTimes = [];
+  let questionScheduled = false;
+
+  const ACTIVITY_WINDOW_MS = 10 * 60 * 1000;
+  const ACTIVITY_THRESHOLD = 6;
+  const MIN_DELAY_MS = 30 * 60 * 1000;
+  const MAX_DELAY_MS = 60 * 60 * 1000;
 
   function getChannelId() {
     const configured = readSetting(guildId, 'chat_channel_id');
@@ -15,9 +22,12 @@ function createIdleChat({ client, readSetting, guildId, fallbackChannelId, idleM
       ? `다음은 최근 채널 대화 내용입니다:\n---\n${recentContext}\n---\n위 대화 흐름을 자연스럽게 받거나 이어받아서(또는 대화가 끊겼다면 관련있는 흥미로운 주제나 새로운 스몰토크 주제로) 다른 유저들이 답하기 좋은 질문 1개를 작성해 주세요.`
       : '일상, 음식/맛집, 추천 영화/드라마/음악, 주말 계획, 최신 게임, 취미 생활 중 하나의 주제로 대화를 유도하는 친근한 질문 1개를 만들어주세요.';
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     const response = await fetch('https://router.huggingface.co/v1/chat/completions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${process.env.HF_TOKEN}`, 'Content-Type': 'application/json' },
+      signal: controller.signal,
       body: JSON.stringify({
         model,
         messages: [
@@ -34,7 +44,7 @@ function createIdleChat({ client, readSetting, guildId, fallbackChannelId, idleM
         max_tokens: 180,
         temperature: 0.85,
       }),
-    });
+    }).finally(() => clearTimeout(timeoutId));
     if (!response.ok) {
       const details = await response.text();
       throw new Error(`Hugging Face request failed: ${response.status} ${details.slice(0, 500)}`);
@@ -80,11 +90,22 @@ function createIdleChat({ client, readSetting, guildId, fallbackChannelId, idleM
 
   function schedule() {
     clearTimeout(timer);
-    if (getChannelId()) timer = setTimeout(sendQuestion, idleMs);
+    questionScheduled = false;
+    recentMessageTimes = [];
   }
 
   function handleMessage(message) {
-    if (!message.author?.bot && message.channelId === getChannelId()) schedule();
+    if (message.author?.bot || message.channelId !== getChannelId()) return;
+
+    const now = Date.now();
+    recentMessageTimes = recentMessageTimes.filter((time) => now - time <= ACTIVITY_WINDOW_MS);
+    recentMessageTimes.push(now);
+
+    if (questionScheduled || recentMessageTimes.length < ACTIVITY_THRESHOLD) return;
+
+    questionScheduled = true;
+    const delay = MIN_DELAY_MS + Math.floor(Math.random() * (MAX_DELAY_MS - MIN_DELAY_MS + 1));
+    timer = setTimeout(sendQuestion, delay);
   }
 
   return { getChannelId, schedule, sendQuestion, handleMessage };

@@ -74,7 +74,6 @@ const idleChat = createIdleChat({
   readSetting,
   guildId: LEVEL_GUILD_ID,
   fallbackChannelId: QUESTION_CHANNEL_ID,
-  idleMs: QUESTION_IDLE_MS,
   model: HF_MODEL,
 });
 
@@ -834,7 +833,7 @@ client.on('interactionCreate', async (interaction) => {
     }
     if (subcommand === '해제') {
       writeSetting(interaction.guildId, 'chat_channel_id', 'disabled');
-      clearTimeout(questionTimer);
+      idleChat.schedule();
       return interaction.reply({ embeds: [communityEmbed('잡담 채널 설정 해제', 'AI 자동 대화 주제 기능을 해제했습니다.', 0xffc857)], flags: MessageFlags.Ephemeral });
     }
     return interaction.reply({ embeds: [communityEmbed('현재 잡담 채널', `<#${idleChat.getChannelId()}>`, 0x5865f2)], flags: MessageFlags.Ephemeral });
