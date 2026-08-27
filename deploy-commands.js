@@ -219,9 +219,24 @@ const guildCommands = [
 
 const supportCommandNames = new Set(['랭킹채널', '후원금액']);
 const supportCommands = guildCommands.filter((command) => supportCommandNames.has(command.name));
-const communityCommands = [
+const globalCommandNames = new Set([
+  '\uC785\uC7A5\uCC44\uB110',
+  '\uC785\uC7A5\uC5ED\uD560',
+  '\uD1F4\uC7A5\uCC44\uB110',
+  '\uB4F1\uAE09\uC5ED\uD560',
+  '\uBCC4\uBA85\uBCC0\uACBD',
+  '\uBCC4\uBA85\uC124\uC815',
+  '\uACBD\uACE0',
+  '\uCD94\uBC29',
+  '\uD0C0\uC784\uC544\uC6C3',
+  '\uC81C\uC81C\uCC44\uB110',
+]);
+const globalCommandsToRegister = [
   ...globalCommands,
-  ...guildCommands.filter((command) => !supportCommandNames.has(command.name)),
+  ...guildCommands.filter((command) => globalCommandNames.has(command.name)),
+];
+const communityCommands = [
+  ...guildCommands.filter((command) => !supportCommandNames.has(command.name) && !globalCommandNames.has(command.name)),
 ];
 
 async function main() {
@@ -230,6 +245,7 @@ async function main() {
   const application = await rest.get(Routes.oauth2CurrentApplication());
   console.log('[1/3] 전역 커맨드 초기화 중...');
   await rest.put(Routes.applicationCommands(application.id), { body: [] });
+  await rest.put(Routes.applicationCommands(application.id), { body: globalCommandsToRegister });
   console.log(`[2/3] 친목서버(${guildId}) 커맨드 ${communityCommands.length}개 등록 중...`);
   await rest.put(Routes.applicationGuildCommands(application.id, guildId), { body: communityCommands });
   console.log('[3/3] 서포트 서버(1525458537139146812) 커맨드 등록 중...');
