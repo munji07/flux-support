@@ -103,7 +103,8 @@ function communityEmbed(title, description, color = 0x5865f2) {
 }
 
 function hasModeratorRole(member) {
-  return member?.roles?.cache?.has(MODERATOR_ROLE_ID);
+  const configuredRoleId = member?.guild?.id ? readSetting(member.guild.id, 'admin_role_id') : null;
+  return member?.roles?.cache?.has(configuredRoleId || MODERATOR_ROLE_ID);
 }
 
 async function getWarningCount(guildId, userId) {
@@ -806,6 +807,29 @@ client.on('interactionCreate', async (interaction) => {
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
+
+  if (interaction.commandName === '\uC5B4\uB4DC\uBBFC\uC5ED\uD560') {
+    if (interaction.user.id !== ADMIN_USER_ID) {
+      return interaction.reply({ content: '\uC11C\uBC84 \uCD5C\uACE0 \uAD00\uB9AC\uC790\uB9CC \uC0AC\uC6A9\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.', flags: MessageFlags.Ephemeral });
+    }
+    if (!interaction.guild) {
+      return interaction.reply({ content: '\uC11C\uBC84\uC5D0\uC11C\uB9CC \uC0AC\uC6A9\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.', flags: MessageFlags.Ephemeral });
+    }
+
+    const action = interaction.options.getSubcommand();
+    if (action === '\uC124\uC815') {
+      const role = interaction.options.getRole('\uC5ED\uD560');
+      writeSetting(interaction.guildId, 'admin_role_id', role.id);
+      return interaction.reply({ content: `${role} \uC5ED\uD560\uC744 \uAD00\uB9AC \uBA85\uB839\uC5B4 \uC0AC\uC6A9 \uC5ED\uD560\uB85C \uC124\uC815\uD588\uC2B5\uB2C8\uB2E4.`, flags: MessageFlags.Ephemeral });
+    }
+    if (action === '\uC81C\uAC70') {
+      deleteSetting(interaction.guildId, 'admin_role_id');
+      return interaction.reply({ content: '\uC124\uC815\uB41C \uAD00\uB9AC \uC5ED\uD560\uC744 \uC81C\uAC70\uD588\uC2B5\uB2C8\uB2E4.', flags: MessageFlags.Ephemeral });
+    }
+
+    const roleId = readSetting(interaction.guildId, 'admin_role_id');
+    return interaction.reply({ content: roleId ? `\uD604\uC7AC \uAD00\uB9AC \uC5ED\uD560: <@&${roleId}>` : '\uC124\uC815\uB41C \uAD00\uB9AC \uC5ED\uD560\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.', flags: MessageFlags.Ephemeral });
+  }
 
   if (await handleSupportInteraction(interaction, db)) return;
 

@@ -5,6 +5,15 @@ const guildId = '1538513625730383902';
 
 const globalCommands = [
   new SlashCommandBuilder()
+    .setName('\uC5B4\uB4DC\uBBFC\uC5ED\uD560')
+    .setDescription('\uAD00\uB9AC \uBA85\uB839\uC5B4\uB97C \uC0AC\uC6A9\uD560 \uC5ED\uD560\uC744 \uC124\uC815\uD569\uB2C8\uB2E4.')
+    .addSubcommand((subcommand) => subcommand
+      .setName('\uC124\uC815')
+      .setDescription('\uAD00\uB9AC \uBA85\uB839\uC5B4\uC6A9 \uC5ED\uD560\uC744 \uC124\uC815\uD569\uB2C8\uB2E4.')
+      .addRoleOption((option) => option.setName('\uC5ED\uD560').setDescription('\uAD00\uB9AC \uBA85\uB839\uC5B4\uB97C \uC0AC\uC6A9\uD560 \uC5ED\uD560').setRequired(true)))
+    .addSubcommand((subcommand) => subcommand.setName('\uC81C\uAC70').setDescription('\uC124\uC815\uB41C \uAD00\uB9AC \uC5ED\uD560\uC744 \uC81C\uAC70\uD569\uB2C8\uB2E4.'))
+    .addSubcommand((subcommand) => subcommand.setName('\uC870\uD68C').setDescription('\uD604\uC7AC \uAD00\uB9AC \uC5ED\uD560\uC744 \uC870\uD68C\uD569\uB2C8\uB2E4.')),
+  new SlashCommandBuilder()
     .setName('입장채널')
     .setDescription('입장 로깅 채널을 관리합니다.')
     .addSubcommand((subcommand) =>
