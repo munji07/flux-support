@@ -205,7 +205,7 @@ const guildCommands = [
     .addSubcommand((subcommand) => subcommand.setName('설정').setDescription('잡담 채널을 지정합니다.').addChannelOption((option) => option.setName('채널').setDescription('잡담 채널').addChannelTypes(ChannelType.GuildText).setRequired(true)))
     .addSubcommand((subcommand) => subcommand.setName('해제').setDescription('잡담 채널 설정을 해제합니다.'))
     .addSubcommand((subcommand) => subcommand.setName('조회').setDescription('현재 잡담 채널을 확인합니다.')),
-  new SlashCommandBuilder().setName('밸런스게임').setDescription('10~30분마다 무작위 밸런스 게임이 올라올 채널을 설정합니다.')
+  new SlashCommandBuilder().setName('밸런스게임').setDescription('대화가 활발할 때만 밸런스 게임이 올라올 채널을 설정합니다.')
     .addSubcommand((subcommand) => subcommand.setName('채널설정').setDescription('밸런스 게임 채널을 지정합니다.').addChannelOption((option) => option.setName('채널').setDescription('밸런스 게임 채널').addChannelTypes(ChannelType.GuildText).setRequired(true)))
     .addSubcommand((subcommand) => subcommand.setName('채널해제').setDescription('밸런스 게임 채널 설정을 해제합니다.'))
     .addSubcommand((subcommand) => subcommand.setName('조회').setDescription('현재 설정된 밸런스 게임 채널을 확인합니다.'))

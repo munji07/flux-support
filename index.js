@@ -689,6 +689,7 @@ client.on('error', (error) => {
 client.on('messageCreate', async (message) => {
   if (message.author?.bot) return;
   idleChat.handleMessage(message);
+  balanceGame.handleMessage(message);
   if (!message.guild || message.guild.id !== LEVEL_GUILD_ID) return;
   if (!message.content) return;
   if (!message.member) return;
@@ -853,7 +854,7 @@ client.on('interactionCreate', async (interaction) => {
       const channel = interaction.options.getChannel('채널');
       writeSetting(interaction.guildId, 'chat_channel_id', channel.id);
       idleChat.schedule();
-      return interaction.reply({ embeds: [communityEmbed('잡담 채널 설정 완료', `${channel}에서 10분 동안 대화가 없으면 AI가 대화 주제를 보냅니다.`, 0x57f287)], flags: MessageFlags.Ephemeral });
+      return interaction.reply({ embeds: [communityEmbed('잡담 채널 설정 완료', `${channel}에서 10분 내 8개 이상 대화가 있을 때만 45~90분 뒤 AI가 대화 주제를 보냅니다. (조용하면 안 올라옵니다)`, 0x57f287)], flags: MessageFlags.Ephemeral });
     }
     if (subcommand === '해제') {
       writeSetting(interaction.guildId, 'chat_channel_id', 'disabled');
@@ -872,7 +873,7 @@ client.on('interactionCreate', async (interaction) => {
       const channel = interaction.options.getChannel('채널');
       writeSetting(interaction.guildId, 'balance_game_channel_id', channel.id);
       balanceGame.schedule();
-      return interaction.reply({ embeds: [communityEmbed('⚖️ 밸런스 게임 채널 설정 완료', `${channel} 채널에 10분~30분 간격 무작위로 밸런스 게임이 올려집니다.`, 0x57f287)], flags: MessageFlags.Ephemeral });
+      return interaction.reply({ embeds: [communityEmbed('⚖️ 밸런스 게임 채널 설정 완료', `${channel} 채널에 15분 내 8개 이상 대화가 있을 때만 60~120분 뒤 밸런스 게임이 올려집니다. (조용하면 안 올라옵니다)`, 0x57f287)], flags: MessageFlags.Ephemeral });
     }
     if (subcommand === '채널해제') {
       if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {

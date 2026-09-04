@@ -3,6 +3,13 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('
 function createBalanceGame({ client, readSetting, writeSetting, deleteSetting, guildId, model }) {
   let timer = null;
   let inProgress = false;
+  let recentMessageTimes = [];
+  let gameScheduled = false;
+
+  const ACTIVITY_WINDOW_MS = 15 * 60 * 1000;
+  const ACTIVITY_THRESHOLD = 8;
+  const MIN_DELAY_MS = 60 * 60 * 1000;
+  const MAX_DELAY_MS = 2 * 60 * 60 * 1000;
 
   // DB에 각 밸런스 게임 투표 결과를 임시 저장 (gameId -> { optionA: number, optionB: number, votedUsers: Map<userId, 'A'|'B'> })
   const activeGames = new Map();
@@ -14,10 +21,7 @@ function createBalanceGame({ client, readSetting, writeSetting, deleteSetting, g
   }
 
   function getRandomIntervalMs() {
-    // 30분 ~ 60분 무작위 (밀리초)
-    const minMs = 60 * 60 * 1000;
-    const maxMs = 2 * 60 * 60 * 1000;
-    return Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+    return Math.floor(Math.random() * (MAX_DELAY_MS - MIN_DELAY_MS + 1)) + MIN_DELAY_MS;
   }
 
   async function generateBalanceQuestion() {
@@ -132,10 +136,22 @@ function createBalanceGame({ client, readSetting, writeSetting, deleteSetting, g
 
   function schedule() {
     clearTimeout(timer);
-    if (getChannelId()) {
-      const delay = getRandomIntervalMs();
-      timer = setTimeout(sendBalanceGame, delay);
-    }
+    gameScheduled = false;
+    recentMessageTimes = [];
+  }
+
+  function handleMessage(message) {
+    if (message.author?.bot || message.channelId !== getChannelId()) return;
+
+    const now = Date.now();
+    recentMessageTimes = recentMessageTimes.filter((time) => now - time <= ACTIVITY_WINDOW_MS);
+    recentMessageTimes.push(now);
+
+    if (gameScheduled || recentMessageTimes.length < ACTIVITY_THRESHOLD) return;
+
+    gameScheduled = true;
+    const delay = getRandomIntervalMs();
+    timer = setTimeout(sendBalanceGame, delay);
   }
 
   async function handleButtonInteraction(interaction) {
@@ -176,7 +192,7 @@ function createBalanceGame({ client, readSetting, writeSetting, deleteSetting, g
     return true;
   }
 
-  return { getChannelId, schedule, sendBalanceGame, handleButtonInteraction };
+  return { getChannelId, schedule, sendBalanceGame, handleButtonInteraction, handleMessage };
 }
 
 module.exports = { createBalanceGame };

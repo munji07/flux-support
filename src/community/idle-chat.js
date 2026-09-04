@@ -5,9 +5,9 @@ function createIdleChat({ client, readSetting, guildId, fallbackChannelId, model
   let questionScheduled = false;
 
   const ACTIVITY_WINDOW_MS = 10 * 60 * 1000;
-  const ACTIVITY_THRESHOLD = 6;
-  const MIN_DELAY_MS = 30 * 60 * 1000;
-  const MAX_DELAY_MS = 60 * 60 * 1000;
+  const ACTIVITY_THRESHOLD = 8;
+  const MIN_DELAY_MS = 45 * 60 * 1000;
+  const MAX_DELAY_MS = 90 * 60 * 1000;
 
   function getChannelId() {
     const configured = readSetting(guildId, 'chat_channel_id');
