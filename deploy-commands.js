@@ -1,5 +1,14 @@
-const { REST, Routes, SlashCommandBuilder, ChannelType } = require('discord.js');
+const { REST, Routes, SlashCommandBuilder, ChannelType, PermissionFlagsBits } = require('discord.js');
 require('dotenv').config({ path: '.env' });
+
+const DISHOUSE_ROOMS = [
+  { name: '거실', value: 'living' },
+  { name: '침실', value: 'bedroom' },
+  { name: '주방', value: 'kitchen' },
+  { name: '방 1', value: 'room1' },
+  { name: '방 2', value: 'room2' },
+  { name: '화장실', value: 'bathroom' },
+];
 
 const guildId = '1538513625730383902';
 
@@ -224,6 +233,10 @@ const guildCommands = [
   new SlashCommandBuilder().setName('친구추천').setDescription('관심사가 같은 친구를 추천받습니다.'),
   new SlashCommandBuilder().setName('친구알림').setDescription('친구 행동 DM 알림을 설정하거나 해제합니다.').addUserOption((option) => option.setName('유저').setDescription('친구').setRequired(true)).addStringOption((option) => option.setName('행동').setDescription('알림 행동').addChoices({ name: '음성 채널 입장', value: 'voice' }, { name: '게임 시작', value: 'game' }).setRequired(true)).addBooleanOption((option) => option.setName('사용').setDescription('알림 사용 여부(생략하면 켜기)')),
   new SlashCommandBuilder().setName('game').setDescription('친구가 특정 게임을 시작할 때 DM 알림을 설정합니다.').addUserOption((option) => option.setName('유저').setDescription('친구').setRequired(true)).addStringOption((option) => option.setName('게임').setDescription('Discord에 표시되는 정확한 게임 이름').setRequired(true)).addBooleanOption((option) => option.setName('사용').setDescription('알림 사용 여부(생략하면 켜기)')),
+  // DISHOUSE — only for community guild (1538513625730383902) via communityCommands
+  new SlashCommandBuilder().setName('채널지정').setDescription('DISHOUSE 방과 Discord 채널을 연결합니다.').addStringOption((o) => o.setName('방').setDescription('방 이름').setRequired(true).addChoices(...DISHOUSE_ROOMS)).addChannelOption((o) => o.setName('채널').setDescription('연결할 채널').addChannelTypes(ChannelType.GuildText).setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('채널정보').setDescription('DISHOUSE 방-채널 연결 현황을 표시합니다.').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('채널초기화').setDescription('DISHOUSE 방 채널 연결을 해제합니다.').addStringOption((o) => o.setName('방').setDescription('방 이름').setRequired(true).addChoices(...DISHOUSE_ROOMS)).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 ].map((command) => command.toJSON());
 
 const supportCommandNames = new Set(['랭킹채널', '후원금액']);

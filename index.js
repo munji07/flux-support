@@ -834,6 +834,43 @@ client.on('interactionCreate', async (interaction) => {
 
   if (await handleSupportInteraction(interaction, db)) return;
 
+  // DISHOUSE — only guild 1538513625730383902
+  if (['채널지정', '채널정보', '채널초기화'].includes(interaction.commandName)) {
+    if (interaction.guildId !== '1538513625730383902') {
+      return interaction.reply({ content: '이 명령어는 지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    }
+    const DISHOUSE_ROOM_LABEL = { living: '거실', bedroom: '침실', kitchen: '주방', room1: '방 1', room2: '방 2', bathroom: '화장실' };
+    const DISHOUSE_EMOJI = { living: '🛋️', bedroom: '🛏️', kitchen: '🍳', room1: '🚪', room2: '🚪', bathroom: '🚿' };
+    const isAdmin = interaction.user.id === ADMIN_USER_ID || interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild) || interaction.member.permissions.has(PermissionsBitField.Flags.Administrator) || hasModeratorRole(interaction.member);
+    if (!isAdmin) {
+      return interaction.reply({ content: '권한이 없습니다. (서버 관리 권한 필요)', flags: MessageFlags.Ephemeral });
+    }
+    if (!db) {
+      return interaction.reply({ content: 'DATABASE_URL이 설정되어 있지 않아 방-채널을 저장할 수 없습니다.', flags: MessageFlags.Ephemeral });
+    }
+    try {
+      if (interaction.commandName === '채널지정') {
+        const roomId = interaction.options.getString('방', true);
+        const channel = interaction.options.getChannel('채널', true);
+        await db.query('UPDATE rooms SET channel_id=$1, updated_at=now() WHERE id=$2', [channel.id, roomId]);
+        return interaction.reply({ content: `✅ ${DISHOUSE_EMOJI[roomId] ?? ''} **${DISHOUSE_ROOM_LABEL[roomId] ?? roomId}** → <#${channel.id}> 연결 완료`, flags: MessageFlags.Ephemeral });
+      }
+      if (interaction.commandName === '채널정보') {
+        const { rows } = await db.query('SELECT id, channel_id FROM rooms ORDER BY id');
+        const lines = rows.map((r) => `${DISHOUSE_EMOJI[r.id] ?? '·'} ${DISHOUSE_ROOM_LABEL[r.id] ?? r.id} → ${r.channel_id ? `<#${r.channel_id}>` : '`미연결`'}`);
+        return interaction.reply({ embeds: [communityEmbed('🏠 DISHOUSE 방 채널 설정', lines.join('\n'))], flags: MessageFlags.Ephemeral });
+      }
+      if (interaction.commandName === '채널초기화') {
+        const roomId = interaction.options.getString('방', true);
+        await db.query('UPDATE rooms SET channel_id=NULL, updated_at=now() WHERE id=$1', [roomId]);
+        return interaction.reply({ content: `🗑️ ${DISHOUSE_ROOM_LABEL[roomId] ?? roomId} 연결 해제 완료`, flags: MessageFlags.Ephemeral });
+      }
+    } catch (e) {
+      console.error('[dishouse]', e);
+      return interaction.reply({ content: `오류: ${e.message}`, flags: MessageFlags.Ephemeral });
+    }
+  }
+
   if (isCommunityCommand(interaction.commandName) && interaction.guildId !== LEVEL_GUILD_ID) {
     return interaction.reply({ content: '친목방 전용 명령어입니다.', flags: MessageFlags.Ephemeral });
   }
