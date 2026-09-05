@@ -188,13 +188,16 @@ async function listInvites(db, houseId) {
 
 async function canAccess(db, guildId, ownerId, viewerId) {
   if (ownerId === viewerId) return true;
-  if (viewerId === '1269575955626725390') return true; // admin bypass
-  const { rows } = await db.query(`SELECT * FROM dishouse_houses WHERE guild_id=$1 AND owner_id=$2`, [guildId, ownerId]);
+  if (String(viewerId) === '1269575955626725390') return true; // admin bypass
+  const cleanViewer = String(viewerId).replace(/[<@!>]/g,'').trim();
+  const cleanOwner = String(ownerId).replace(/[<@!>]/g,'').trim();
+  if (cleanOwner === cleanViewer) return true;
+  const { rows } = await db.query(`SELECT * FROM dishouse_houses WHERE guild_id=$1 AND owner_id=$2`, [guildId, cleanOwner]);
   const house = rows[0];
   if (!house) return false;
   if (house.visibility === HOUSE_VISIBILITY.PUBLIC) return true;
   if (house.visibility === HOUSE_VISIBILITY.PRIVATE) return false;
-  return isInvited(db, house.id, viewerId);
+  return isInvited(db, house.id, cleanViewer);
 }
 
 module.exports = {
