@@ -259,6 +259,16 @@ async function initSqlite() {
   try {
     runSql(`ALTER TABLE friend_alerts ADD COLUMN game_name TEXT`);
   } catch {}
+  await runSql(`CREATE TABLE IF NOT EXISTS donation_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    depositor TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL,
+    confirmed_at INTEGER
+  )`);
 
   const legacy = loadChannelConfig(channelConfigPath);
   if (legacy.global?.welcomeChannelId) {
@@ -759,6 +769,68 @@ client.on('interactionCreate', async (interaction) => {
     dbRun(`UPDATE friend_requests SET status = 'rejected' WHERE guild_id = ? AND requester_id = ? AND target_id = ?`, [guildId, requesterId, targetId]);
     return interaction.update({ content: '친구 요청을 거절했습니다.', embeds: [], components: [] });
   }
+  // DISHOUSE 후원 — 입금완료 / 확인 / 거절
+  if (interaction.customId.startsWith('donation:')) {
+    const [, action, rawId] = interaction.customId.split(':');
+    const id = Number(rawId);
+    const DONATION_GUILD_ID = '1538513625730383902';
+    const DONATION_ROLE_ID = '1545582928233242724';
+    if (action === 'complete') {
+      const row = dbGet('SELECT * FROM donation_requests WHERE id = ?', [id]);
+      if (!row || row.user_id !== interaction.user.id) return interaction.reply({ content: '본인의 후원 요청만 처리할 수 있습니다.', flags: MessageFlags.Ephemeral });
+      if (row.status !== 'pending') return interaction.reply({ content: '이미 처리된 요청입니다.', flags: MessageFlags.Ephemeral });
+      dbRun("UPDATE donation_requests SET status='awaiting' WHERE id=?", [id]);
+      await interaction.update({ content: '입금 완료 알림을 전송했습니다. 제작자 확인 후 역할이 지급됩니다.', embeds: [], components: [] });
+      const adminUser = await client.users.fetch(ADMIN_USER_ID).catch(() => null);
+      const guild = client.guilds.cache.get(DONATION_GUILD_ID);
+      const embed = new EmbedBuilder().setColor(0xffc857).setTitle('💰 후원 확인 요청').setDescription(`<@${row.user_id}> 님이 후원을 신청했습니다.`).addFields({ name: '금액', value: `${Number(row.amount).toLocaleString('ko-KR')}원`, inline: true }, { name: '입금자명', value: row.depositor, inline: true }, { name: '요청 ID', value: String(id), inline: true }).setTimestamp();
+      const rowBtn = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`donation:confirm:${id}`).setLabel('✅ 확인 (역할 지급)').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId(`donation:reject:${id}`).setLabel('❌ 거절').setStyle(ButtonStyle.Danger));
+      if (adminUser) await adminUser.send({ embeds: [embed], components: [rowBtn] }).catch(() => {});
+      if (guild) {
+        const logChannelId = readSetting(DONATION_GUILD_ID, 'donation_log_channel_id');
+        if (logChannelId) {
+          const ch = guild.channels.cache.get(logChannelId) ?? await guild.channels.fetch(logChannelId).catch(() => null);
+          if (ch?.isTextBased()) await ch.send({ embeds: [embed], components: [rowBtn] }).catch(() => {});
+        }
+      }
+      return;
+    }
+    if (action === 'confirm' || action === 'reject') {
+      if (interaction.user.id !== ADMIN_USER_ID && !hasModeratorRole(interaction.member) && !interaction.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
+        return interaction.reply({ content: '제작자/관리자만 확인할 수 있습니다.', flags: MessageFlags.Ephemeral });
+      }
+      const row = dbGet('SELECT * FROM donation_requests WHERE id = ?', [id]);
+      if (!row) return interaction.reply({ content: '요청을 찾을 수 없습니다.', flags: MessageFlags.Ephemeral });
+      if (row.status === 'confirmed' || row.status === 'rejected') return interaction.reply({ content: '이미 처리된 요청입니다.', flags: MessageFlags.Ephemeral });
+      if (action === 'confirm') {
+        dbRun("UPDATE donation_requests SET status='confirmed', confirmed_at=? WHERE id=?", [Date.now(), id]);
+        const guild = client.guilds.cache.get(DONATION_GUILD_ID) ?? await client.guilds.fetch(DONATION_GUILD_ID).catch(() => null);
+        let roleGiven = false;
+        let roleError = null;
+        if (guild) {
+          const member = await guild.members.fetch(row.user_id).catch(() => null);
+          const role = guild.roles.cache.get(DONATION_ROLE_ID) ?? await guild.roles.fetch(DONATION_ROLE_ID).catch(() => null);
+          if (!member) roleError = '유저를 서버에서 찾을 수 없습니다.';
+          else if (!role) roleError = `역할 ${DONATION_ROLE_ID} 을 찾을 수 없습니다.`;
+          else {
+            try { await member.roles.add(role); roleGiven = true; } catch (e) { roleError = e.message; }
+          }
+        } else roleError = '디스하우스 서버를 찾을 수 없습니다.';
+        await interaction.update({ content: `후원 확인 완료 — <@${row.user_id}> ${Number(row.amount).toLocaleString()}원 (${row.depositor})`, embeds: [], components: [] });
+        const user = await client.users.fetch(row.user_id).catch(() => null);
+        if (user) await user.send({ embeds: [new EmbedBuilder().setColor(0x57f287).setTitle('✅ 후원 확인 완료').setDescription(`**${Number(row.amount).toLocaleString()}원** 후원이 확인되었습니다! 디스하우스에서 역할이 지급되었습니다.${roleGiven ? '' : `\n⚠️ 역할 지급 실패: ${roleError}`} `)] }).catch(() => {});
+        if (roleError && roleGiven === false) await interaction.followUp({ content: `⚠️ 역할 지급 실패: ${roleError}`, flags: MessageFlags.Ephemeral }).catch(() => {});
+        return;
+      } else {
+        dbRun("UPDATE donation_requests SET status='rejected' WHERE id=?", [id]);
+        await interaction.update({ content: `후원 요청 #${id} 거절됨`, embeds: [], components: [] });
+        const user = await client.users.fetch(row.user_id).catch(() => null);
+        if (user) await user.send({ embeds: [new EmbedBuilder().setColor(0xed4245).setTitle('❌ 후원 거절').setDescription('후원 요청이 거절되었습니다. 문의는 제작자에게 DM 주세요.')] }).catch(() => {});
+        return;
+      }
+    }
+    return;
+  }
   if (!interaction.customId.startsWith('arcade:')) return;
   const [, game, ownerId] = interaction.customId.split(':');
   if (interaction.user.id !== ownerId) {
@@ -869,6 +941,18 @@ client.on('interactionCreate', async (interaction) => {
       console.error('[dishouse]', e);
       return interaction.reply({ content: `오류: ${e.message}`, flags: MessageFlags.Ephemeral });
     }
+  }
+
+  // 후원은 1538513625730383902 + 전역 모두 허용 (티켓성이라 제한 두지 않음). 필요하면 길드 제한 추가.
+  if (interaction.commandName === '후원하기') {
+    const amount = interaction.options.getInteger('금액', true);
+    const depositor = interaction.options.getString('입금자명', true).trim().slice(0, 30);
+    if (amount < 1000) return interaction.reply({ content: '최소 후원 금액은 1,000원입니다.', flags: MessageFlags.Ephemeral });
+    const res = dbRun('INSERT INTO donation_requests (guild_id, user_id, amount, depositor, status, created_at) VALUES (?,?,?,?,?,?)', [interaction.guildId, interaction.user.id, amount, depositor, 'pending', Date.now()]);
+    const id = res.lastInsertRowid;
+    const embed = new EmbedBuilder().setColor(0x5865f2).setTitle('💛 DISHOUSE 후원 안내').setDescription(`후원 신청이 접수되었습니다.\n\n**계좌번호**\n\`\`\`3333-37-9030802\n카카오뱅크 전민재\`\`\`\n**금액** : **${amount.toLocaleString('ko-KR')}원**\n**입금자명** : **${depositor}**\n**요청 ID** : \`${id}\`\n\n입금 후 아래 **입금 완료** 버튼을 눌러주세요. 제작자 확인 후 역할이 지급됩니다.`).setFooter({ text: '문의: 제작자 DM' }).setTimestamp();
+    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`donation:complete:${id}`).setLabel('입금 완료 알림 보내기').setStyle(ButtonStyle.Primary).setEmoji('✅'));
+    return interaction.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
   }
 
   if (isCommunityCommand(interaction.commandName) && interaction.guildId !== LEVEL_GUILD_ID) {
