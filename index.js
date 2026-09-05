@@ -19,6 +19,10 @@ const {
   loadChannelConfig,
 } = require('./lib/database.js');
 process.on('unhandledRejection', (error) => {
+  if (error?.code === 10062 || error?.code === 40060) {
+    console.warn(`[unhandled] interaction ${error.code} ignored`);
+    return;
+  }
   console.error('Unhandled promise rejection:', error);
 });
 
@@ -137,6 +141,32 @@ function errorEmbed(title, description) {
 
 function communityEmbed(title, description, color = 0x5865f2) {
   return new EmbedBuilder().setColor(color).setTitle(title).setDescription(description).setTimestamp();
+}
+
+// interaction timeout 방지 — PG 첫 연결이 3초 넘으면 Unknown interaction 발생
+async function safeDefer(interaction, ephemeral = true) {
+  if (interaction.deferred || interaction.replied) return;
+  try {
+    await interaction.deferReply({ flags: ephemeral ? MessageFlags.Ephemeral : undefined });
+  } catch {}
+}
+async function safeReply(interaction, options) {
+  try {
+    if (interaction.deferred) return await interaction.editReply(options);
+    if (interaction.replied) return await interaction.followUp({ ...options, flags: MessageFlags.Ephemeral });
+    return await interaction.reply(options);
+  } catch (e) {
+    // 10062 Unknown interaction / 40060 already acknowledged 는 이미 만료 — 로그만
+    if (e?.code === 10062 || e?.code === 40060) {
+      console.warn(`[interaction] ${e.code} ${interaction.commandName ?? interaction.customId}: ${e.message}`);
+      return;
+    }
+    throw e;
+  }
+}
+async function safeDeferUpdate(interaction) {
+  if (interaction.deferred || interaction.replied) return;
+  try { await interaction.deferUpdate(); } catch {}
 }
 
 function hasModeratorRole(member) {
@@ -757,6 +787,9 @@ client.once('clientReady', async () => {
   if (db) {
     await db.query('ALTER TABLE user_subscriptions ADD COLUMN IF NOT EXISTS donation_amount INTEGER NOT NULL DEFAULT 0').catch(console.error);
     await db.query('CREATE TABLE IF NOT EXISTS donation_ranking_channels (guild_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, message_id TEXT NOT NULL)').catch(console.error);
+    // PG 커넥션 워밍업 — 첫 인터랙션 3초 타임아웃 방지
+    await db.query('SELECT 1').catch(()=>{});
+    console.log('[pg] pool warmed');
   }
 
   idleChat.schedule();
@@ -764,6 +797,10 @@ client.once('clientReady', async () => {
 });
 
 client.on('error', (error) => {
+  if (error?.code === 10062 || error?.code === 40060) {
+    console.warn(`[discord] interaction expired/acked: ${error.code}`);
+    return;
+  }
   console.error('Discord client error:', error);
 });
 
@@ -814,6 +851,7 @@ function arcadePanel(user, coins, title = '🎰 FLUX 도파민 아케이드') {
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isButton()) return;
+  try {
   if (await balanceGame.handleButtonInteraction(interaction)) return;
   if (interaction.customId.startsWith('friend:')) {
     const [, action, guildId, requesterId, targetId] = interaction.customId.split(':');
@@ -909,12 +947,12 @@ client.on('interactionCreate', async (interaction) => {
   }
   if (game === 'close') return interaction.update({ components: [] });
 
+  // 버튼은 3초 내 defer 필요 — PG 조회 전에 먼저 ack
+  await safeDeferUpdate(interaction);
   const user = await getPlayer(interaction.guildId, interaction.user.id);
   if (user.coins < ARCADE_BET) {
-    return interaction.reply({ embeds: [errorEmbed('💸 코인이 부족해요', `최소 **${ARCADE_BET} 코인**이 필요합니다. 메시지를 보내 코인을 모아보세요!`)], flags: MessageFlags.Ephemeral });
+    return interaction.editReply({ embeds: [errorEmbed('💸 코인이 부족해요', `최소 **${ARCADE_BET} 코인**이 필요합니다. 메시지를 보내 코인을 모아보세요!`)], components: [] }).catch(()=> interaction.followUp({ embeds: [errorEmbed('💸 코인이 부족해요', `최소 **${ARCADE_BET} 코인**이 필요합니다.` )], flags: MessageFlags.Ephemeral }).catch(()=>{}));
   }
-
-  await interaction.deferUpdate();
   const animationFrames = game === 'slots'
     ? ['🎰 | ❔ | ❔ | ❔ |', '🎰 | 🍒 | ❔ | ❔ |', '🎰 | 🍒 | 🔔 | ❔ |', '🎰 | 🍒 | 🔔 | 💎 |']
     : game === 'dice'
@@ -947,10 +985,15 @@ client.on('interactionCreate', async (interaction) => {
   const coinDelta = reward - ARCADE_BET;
   await addCoinsDelta(interaction.guildId, interaction.user.id, coinDelta);
   await interaction.editReply(arcadePanel(interaction.user, user.coins, `✨ ${game === 'slots' ? '슬롯 결과' : game === 'dice' ? '주사위 결과' : '코인 러시 결과'}\n\n${result}`));
+  } catch (error) {
+    if (error?.code === 10062 || error?.code === 40060) { console.warn(`[button] ${error.code} ${interaction.customId}: ${error.message}`); return; }
+    console.error('button interaction error:', error);
+  }
 });
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
+  try {
 
   if (interaction.commandName === '\uC5B4\uB4DC\uBBFC\uC5ED\uD560') {
     if (interaction.user.id !== ADMIN_USER_ID) {
@@ -1200,10 +1243,11 @@ const mapping = dbGet('SELECT role_id FROM interest_roles WHERE guild_id = ? AND
 
   if (interaction.commandName === 'arcade') {
     if (interaction.guildId !== LEVEL_GUILD_ID) {
-      return interaction.reply({ content: '이 명령어는 지정된 서버에서만 사용할 수 있어요.', flags: MessageFlags.Ephemeral });
+      return safeReply(interaction, { content: '이 명령어는 지정된 서버에서만 사용할 수 있어요.', flags: MessageFlags.Ephemeral });
     }
+    await safeDefer(interaction);
     const user = await getPlayer(interaction.guildId, interaction.user.id);
-    return interaction.reply(arcadePanel(interaction.member, user.coins));
+    return interaction.editReply(arcadePanel(interaction.member, user.coins));
   }
 
   if (interaction.commandName === '레벨') {
@@ -1213,17 +1257,17 @@ const mapping = dbGet('SELECT role_id FROM interest_roles WHERE guild_id = ? AND
 
     const subcommand = interaction.options.getSubcommand();
     if (subcommand === '조회') {
+      await safeDefer(interaction);
       const settings = await getLevelSettings(interaction.guildId);
       const user = await getPlayer(interaction.guildId, interaction.user.id);
       const next = getXpRequirement(settings, user.level);
-      return interaction.reply({
+      return interaction.editReply({
         embeds: [
           successEmbed(
             '레벨 정보',
             `**레벨**: ${user.level}\n**경험치**: ${user.xp}/${next}\n**코인**: ${user.coins}\n**메시지 수**: ${user.messages}`
           ),
         ],
-        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -1253,80 +1297,84 @@ const mapping = dbGet('SELECT role_id FROM interest_roles WHERE guild_id = ? AND
 
   if (interaction.commandName === '코인') {
     if (interaction.guildId !== LEVEL_GUILD_ID) {
-      return interaction.reply({ content: '이 명령어는 지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+      return safeReply(interaction, { content: '이 명령어는 지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     }
+    await safeDefer(interaction);
     const user = await getPlayer(interaction.guildId, interaction.user.id);
-    return interaction.reply({ embeds: [successEmbed('코인 보유량', `**${user.coins} 코인**`)], flags: MessageFlags.Ephemeral });
+    return interaction.editReply({ embeds: [successEmbed('코인 보유량', `**${user.coins} 코인**`)] });
   }
 
   if (interaction.commandName === '별명변경') {
     if (interaction.guildId !== LEVEL_GUILD_ID) {
-      return interaction.reply({ embeds: [errorEmbed('사용 불가', '이 명령어는 지정된 서버에서만 사용할 수 있습니다.')], flags: MessageFlags.Ephemeral });
+      return safeReply(interaction, { embeds: [errorEmbed('사용 불가', '이 명령어는 지정된 서버에서만 사용할 수 있습니다.')], flags: MessageFlags.Ephemeral });
     }
     const nickname = interaction.options.getString('별명');
     const member = interaction.member;
     const botMember = interaction.guild.members.me ?? await interaction.guild.members.fetchMe().catch(() => null);
     if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageNicknames)) {
-      return interaction.reply({ embeds: [errorEmbed('권한 부족', '봇에 닉네임 변경 권한이 없습니다.')], flags: MessageFlags.Ephemeral });
+      return safeReply(interaction, { embeds: [errorEmbed('권한 부족', '봇에 닉네임 변경 권한이 없습니다.')], flags: MessageFlags.Ephemeral });
     }
 
+    await safeDefer(interaction);
     const settings = await getLevelSettings(interaction.guildId);
     const user = await getPlayer(interaction.guildId, interaction.user.id);
     const now = Date.now();
     if (now - user.last_nickname_change_at < 30 * 60 * 1000) {
-      return interaction.reply({ embeds: [errorEmbed('쿨다운', '별명은 30분에 한 번만 변경할 수 있습니다.')], flags: MessageFlags.Ephemeral });
+      return interaction.editReply({ embeds: [errorEmbed('쿨다운', '별명은 30분에 한 번만 변경할 수 있습니다.')] });
     }
 
     const desired = settings.nickname_prefix ? buildPrefixedNickname(user.level, nickname) : nickname.slice(0, 32);
     user.last_nickname_change_at = now;
     await savePlayer(interaction.guildId, interaction.user.id, user);
     await member.setNickname(desired).catch(() => {});
-    return interaction.reply({ embeds: [successEmbed('별명 변경', `**${desired}** 로 변경했습니다.`)], flags: MessageFlags.Ephemeral });
+    return interaction.editReply({ embeds: [successEmbed('별명 변경', `**${desired}** 로 변경했습니다.`)] });
   }
 
   if (interaction.commandName === '별명설정') {
     if (interaction.user.id !== ADMIN_USER_ID) {
-      return interaction.reply({ embeds: [errorEmbed('권한 부족', '관리자만 사용할 수 있는 명령어입니다.')], flags: MessageFlags.Ephemeral });
+      return safeReply(interaction, { embeds: [errorEmbed('권한 부족', '관리자만 사용할 수 있는 명령어입니다.')], flags: MessageFlags.Ephemeral });
     }
     if (interaction.guildId !== LEVEL_GUILD_ID) {
-      return interaction.reply({ embeds: [errorEmbed('사용 불가', '이 명령어는 지정된 서버에서만 사용할 수 있습니다.')], flags: MessageFlags.Ephemeral });
+      return safeReply(interaction, { embeds: [errorEmbed('사용 불가', '이 명령어는 지정된 서버에서만 사용할 수 있습니다.')], flags: MessageFlags.Ephemeral });
     }
 
     const target = interaction.options.getUser('유저');
     const nickname = interaction.options.getString('별명');
     const botMember = interaction.guild.members.me ?? await interaction.guild.members.fetchMe().catch(() => null);
     if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageNicknames)) {
-      return interaction.reply({ embeds: [errorEmbed('권한 부족', '봇에 닉네임 변경 권한이 없습니다.')], flags: MessageFlags.Ephemeral });
+      return safeReply(interaction, { embeds: [errorEmbed('권한 부족', '봇에 닉네임 변경 권한이 없습니다.')], flags: MessageFlags.Ephemeral });
     }
 
+    await safeDefer(interaction);
     const settings = await getLevelSettings(interaction.guildId);
     const user = await getPlayer(interaction.guildId, target.id);
     const member = await interaction.guild.members.fetch(target.id).catch(() => null);
     if (!member) {
-      return interaction.reply({ embeds: [errorEmbed('대상 없음', '대상 유저를 서버에서 찾을 수 없습니다.')], flags: MessageFlags.Ephemeral });
+      return interaction.editReply({ embeds: [errorEmbed('대상 없음', '대상 유저를 서버에서 찾을 수 없습니다.')] });
     }
 
     const desired = settings.nickname_prefix ? buildPrefixedNickname(user.level, nickname) : nickname.slice(0, 32);
     await savePlayer(interaction.guildId, target.id, user);
     await member.setNickname(desired).catch(() => {});
-    return interaction.reply({ embeds: [successEmbed('별명 설정', `${target}의 서버 별명을 **${desired}** 로 설정했습니다.`)], flags: MessageFlags.Ephemeral });
+    return interaction.editReply({ embeds: [successEmbed('별명 설정', `${target}의 서버 별명을 **${desired}** 로 설정했습니다.`)] });
   }
 
   if (interaction.commandName === '미니게임') {
     if (interaction.guildId !== LEVEL_GUILD_ID) {
-      return interaction.reply({ content: '이 명령어는 지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+      return safeReply(interaction, { content: '이 명령어는 지정된 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
     }
     const subcommand = interaction.options.getSubcommand();
+    await safeDefer(interaction);
     const bet = interaction.options.getInteger('코인');
     const user = await getPlayer(interaction.guildId, interaction.user.id);
     const safeBet = clamp(bet, 1, user.coins);
 
     if (user.coins < 1) {
-      return interaction.reply({ content: '肄붿씤??遺議깊빀?덈떎.', flags: MessageFlags.Ephemeral });
+      return interaction.editReply({ content: '코인이 부족합니다.' });
     }
 
     if (['슬롯', '복권'].includes(subcommand) && safeBet > user.coins) {
-      return interaction.reply({ content: '코인이 부족합니다.', flags: MessageFlags.Ephemeral });
+      return interaction.editReply({ content: '코인이 부족합니다.' });
     }
 
     if (subcommand === '슬롯') {
@@ -1337,9 +1385,8 @@ const mapping = dbGet('SELECT role_id FROM interest_roles WHERE guild_id = ? AND
       const reward = win ? safeBet * 3 : 0;
       user.coins += reward;
       await savePlayer(interaction.guildId, interaction.user.id, user);
-      return interaction.reply({
+      return interaction.editReply({
         content: `| ${spins.join(' | ')} |\n${win ? `당첨! +${reward} 코인` : `실패! -${safeBet} 코인`}`,
-        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -1351,9 +1398,8 @@ const mapping = dbGet('SELECT role_id FROM interest_roles WHERE guild_id = ? AND
       const reward = win ? safeBet * 8 : 0;
       user.coins += reward;
       await savePlayer(interaction.guildId, interaction.user.id, user);
-      return interaction.reply({
+      return interaction.editReply({
         content: `복권 번호: **${ticket}**\n당첨 번호: **${lucky}**\n${win ? `당첨! +${reward} 코인` : `꽝! -${safeBet} 코인`}`,
-        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -1374,14 +1420,13 @@ const mapping = dbGet('SELECT role_id FROM interest_roles WHERE guild_id = ? AND
         user.coins -= safeBet;
       }
       await savePlayer(interaction.guildId, interaction.user.id, user);
-      return interaction.reply({
+      return interaction.editReply({
         content: `당신: **${choice}**\n봇: **${outcome}**\n결과: **${result}**\n현재 코인: **${user.coins}**`,
-        flags: MessageFlags.Ephemeral,
       });
     }
 
     if (subcommand === '가위바위보') {
-      return interaction.reply({
+      return interaction.editReply({
         content: '가위바위보는 `/미니게임 베팅`으로 진행합니다.',
         flags: MessageFlags.Ephemeral,
       });
@@ -1398,6 +1443,7 @@ const mapping = dbGet('SELECT role_id FROM interest_roles WHERE guild_id = ? AND
 
     const subcommand = interaction.options.getSubcommand();
     if (subcommand === '설정') {
+      await safeDefer(interaction);
       const target = interaction.options.getUser('유저');
       const level = interaction.options.getInteger('레벨');
       const xp = interaction.options.getInteger('경험치');
@@ -1412,9 +1458,8 @@ const mapping = dbGet('SELECT role_id FROM interest_roles WHERE guild_id = ? AND
         messages: messages ?? current.messages,
       };
       await savePlayer(interaction.guildId, target.id, next);
-      return interaction.reply({
+      return interaction.editReply({
         content: `${target}의 데이터를 저장했습니다.\n레벨: ${next.level}\n경험치: ${next.xp}\n코인: ${next.coins}\n메시지: ${next.messages}`,
-        flags: MessageFlags.Ephemeral,
       });
     }
   }
@@ -1641,7 +1686,22 @@ const mapping = dbGet('SELECT role_id FROM interest_roles WHERE guild_id = ? AND
     });
   } catch (error) {
     console.error('Donation amount command error:', error);
-    await interaction.reply({ content: '후원금액 처리 중 오류가 발생했습니다.', flags: MessageFlags.Ephemeral }).catch(() => {});
+    try {
+      const p = { content: '후원금액 처리 중 오류가 발생했습니다.', flags: MessageFlags.Ephemeral };
+      if (interaction.deferred) await interaction.editReply(p);
+      else if (interaction.replied) await interaction.followUp(p);
+      else await interaction.reply(p);
+    } catch {}
+  }
+  } catch (error) {
+    if (error?.code === 10062 || error?.code === 40060) { console.warn(`[interaction] ${error.code} ${interaction.commandName}: ${error.message}`); return; }
+    console.error('interactionCreate error:', error);
+    try {
+      const payload = { content: `오류: ${error.message ?? error}`, flags: MessageFlags.Ephemeral };
+      if (interaction.deferred) await interaction.editReply(payload);
+      else if (interaction.replied) await interaction.followUp(payload);
+      else await interaction.reply(payload);
+    } catch {}
   }
 });
 
