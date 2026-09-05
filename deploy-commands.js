@@ -238,6 +238,7 @@ const guildCommands = [
   new SlashCommandBuilder().setName('채널정보').setDescription('DISHOUSE 방-채널 연결 현황을 표시합니다.').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   new SlashCommandBuilder().setName('채널초기화').setDescription('DISHOUSE 방 채널 연결을 해제합니다.').addStringOption((o) => o.setName('방').setDescription('방 이름').setRequired(true).addChoices(...DISHOUSE_ROOMS)).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   new SlashCommandBuilder().setName('후원하기').setDescription('DISHOUSE 후원을 신청합니다.').addIntegerOption((o) => o.setName('금액').setDescription('후원 금액(원)').setMinValue(1000).setRequired(true)).addStringOption((o) => o.setName('입금자명').setDescription('입금자명 (예: 홍길동)').setRequired(true)),
+  new SlashCommandBuilder().setName('후원랭킹').setDescription('후원 랭킹 채널을 관리합니다').addSubcommand((s) => s.setName('설정').setDescription('랭킹을 게시할 채널을 설정합니다').addChannelOption((o) => o.setName('채널').setDescription('랭킹 채널').addChannelTypes(ChannelType.GuildText).setRequired(true))).addSubcommand((s) => s.setName('제거').setDescription('랭킹 채널을 제거합니다')).addSubcommand((s) => s.setName('조회').setDescription('현재 랭킹 채널을 조회합니다')).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 ].map((command) => command.toJSON());
 
 const supportCommandNames = new Set(['랭킹채널', '후원금액']);
