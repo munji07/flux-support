@@ -4,6 +4,7 @@ const pg = require('pg');
 const path = require('path');
 const { handleSupportInteraction } = require('./src/support/commands.js');
 const { COMMUNITY_GUILD_ID, QUESTION_CHANNEL_ID, QUESTION_IDLE_MS, HF_MODEL } = require('./src/community');
+const houses = require('./src/houses.js');
 const { createIdleChat } = require('./src/community/idle-chat');
 const { createBalanceGame } = require('./src/community/balance-game');
 const { isCommunityCommand } = require('./src/community/commands');
@@ -783,6 +784,7 @@ client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   await initSqlite();
   await ensurePgTables();
+  await houses.ensureHouseTables(db);
 
   if (db) {
     await db.query('ALTER TABLE user_subscriptions ADD COLUMN IF NOT EXISTS donation_amount INTEGER NOT NULL DEFAULT 0').catch(console.error);
@@ -1054,6 +1056,87 @@ client.on('interactionCreate', async (interaction) => {
     } catch (e) {
       console.error('[dishouse]', e);
       return interaction.reply({ content: `오류: ${e.message}`, flags: MessageFlags.Ephemeral });
+    }
+  }
+
+  // ── 개인 하우스 ────────────────────────────────────────────────────
+  if (['집생성','집삭제','집정보','집목록','집설정','집초대','집초대취소'].includes(interaction.commandName)) {
+    if (interaction.guildId !== houses.HOUSE_GUILD_ID) {
+      return interaction.reply({ content: '이 명령어는 DISHOUSE 서버에서만 사용할 수 있습니다.', flags: MessageFlags.Ephemeral });
+    }
+    if (!db) return interaction.reply({ content: 'DATABASE_URL이 설정되어 있지 않습니다.', flags: MessageFlags.Ephemeral });
+    try {
+      await houses.ensureHouseTables(db);
+      const guild = interaction.guild ?? await client.guilds.fetch(houses.HOUSE_GUILD_ID);
+      if (interaction.commandName === '집생성') {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const displayName = interaction.member?.displayName ?? interaction.user.globalName ?? interaction.user.username;
+        const house = await houses.ensureHouse(db, guild, interaction.user.id, displayName);
+        const visibilityLabel = house.visibility === 'private' ? '비공개' : house.visibility==='public' ? '공용' : '초대만';
+        return interaction.editReply({ embeds: [successEmbed('🏠 하우스 생성 완료', `**${house.channel_name}**\n${house.channel_id ? `<#${house.channel_id}>` : ''}\n층수: **${house.floor}층** · 공개: **${visibilityLabel}**\n\n채널이 자동으로 생성되었습니다. \`/집초대\` 또는 \`/집설정 공용\`으로 설정하세요!`)] });
+      }
+      if (interaction.commandName === '집삭제') {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const house = await houses.deleteHouse(db, guild, interaction.user.id);
+        if (!house) return interaction.editReply({ embeds: [errorEmbed('집 없음', '생성된 하우스가 없습니다. `/집생성`으로 먼저 만들어주세요.')] });
+        return interaction.editReply({ embeds: [successEmbed('🗑️ 하우스 삭제 완료', `**${house.channel_name}** 하우스가 삭제되었습니다.`)] });
+      }
+      if (interaction.commandName === '집정보') {
+        const target = interaction.options.getUser('유저') ?? interaction.user;
+        const { rows } = await db.query(`SELECT * FROM dishouse_houses WHERE guild_id=$1 AND owner_id=$2`, [houses.HOUSE_GUILD_ID, target.id]);
+        const house = rows[0];
+        if (!house) return interaction.reply({ content: `${target}님의 하우스가 아직 없습니다.`, flags: MessageFlags.Ephemeral });
+        const invites = await houses.listInvites(db, house.id);
+        const inviteList = invites.length ? invites.map(r=>`<@${r.target_id}>`).join(', ') : '없음';
+        const visLabel = house.visibility === 'private' ? '비공개 (나만)' : house.visibility === 'public' ? '공용 (누구나)' : '초대만';
+        return interaction.reply({ embeds: [communityEmbed(`🏠 ${house.owner_name || target.username}의 집`, `채널: ${house.channel_id ? `<#${house.channel_id}>` : '미생성'}\n층수: **${house.floor}층**\n이름: **${house.channel_name}**\n공개: **${visLabel}**\n초대: ${inviteList}`)], flags: MessageFlags.Ephemeral });
+      }
+      if (interaction.commandName === '집목록') {
+        const { rows } = await db.query(`SELECT * FROM dishouse_houses WHERE guild_id=$1 ORDER BY floor`, [houses.HOUSE_GUILD_ID]);
+        if (!rows.length) return interaction.reply({ content: '아직 생성된 하우스가 없습니다.', flags: MessageFlags.Ephemeral });
+        const vis = (v) => v==='private' ? '비공개' : v==='public' ? '공용' : '초대만';
+        const lines = rows.map(r => `${r.floor}층・**${r.owner_name}** — ${r.channel_id ? `<#${r.channel_id}>` : r.channel_name} (${vis(r.visibility)})`);
+        return interaction.reply({ embeds: [communityEmbed('🏠 하우스 목록', lines.join('\n'))], flags: MessageFlags.Ephemeral });
+      }
+      if (interaction.commandName === '집설정') {
+        const vis = interaction.options.getString('공개', true);
+        const house = await houses.setVisibility(db, houses.HOUSE_GUILD_ID, interaction.user.id, vis);
+        if (!house) return interaction.reply({ content: '하우스가 없습니다. `/집생성`으로 먼저 만들어주세요.', flags: MessageFlags.Ephemeral });
+        await houses.updateHouseChannelPermissions(guild, house);
+        const label = vis === 'private' ? '비공개 (나만)' : vis === 'public' ? '공용 (누구나 입장)' : '초대만 (초대받은 사람만)';
+        return interaction.reply({ embeds: [successEmbed('⚙️ 하우스 설정 변경', `공개 범위를 **${label}** 로 변경했습니다.\n채널: <#${house.channel_id}>` + (vis==='public' ? '\n이제 누구나 사이트와 디스코드에서 입장할 수 있습니다.' : ''))], flags: MessageFlags.Ephemeral });
+      }
+      if (interaction.commandName === '집초대') {
+        const target = interaction.options.getUser('유저', true);
+        if (target.bot) return interaction.reply({ content: '봇은 초대할 수 없습니다.', flags: MessageFlags.Ephemeral });
+        if (target.id === interaction.user.id) return interaction.reply({ content: '자기 자신은 초대할 수 없습니다.', flags: MessageFlags.Ephemeral });
+        const { rows } = await db.query(`SELECT * FROM dishouse_houses WHERE guild_id=$1 AND owner_id=$2`, [houses.HOUSE_GUILD_ID, interaction.user.id]);
+        const house = rows[0];
+        if (!house) return interaction.reply({ content: '하우스가 없습니다. `/집생성`으로 먼저 만들어주세요.', flags: MessageFlags.Ephemeral });
+        await houses.addInvite(db, house.id, target.id, interaction.user.id);
+        // DM 알림
+        await target.send({ embeds: [new EmbedBuilder().setColor(0x57f287).setTitle('🏠 하우스 초대').setDescription(`**${interaction.user.tag}** 님이 **${house.channel_name}** 하우스에 초대했습니다!\n홈페이지(${process.env.NEXT_PUBLIC_SITE_URL || 'https://dishouse.p-e.kr'})에서 입장하면 디스코드 채널 <#${house.channel_id}> 이 나타납니다.`)] }).catch(()=>{});
+        return interaction.reply({ embeds: [successEmbed('✅ 초대 완료', `${target} 님을 **${house.channel_name}** 하우스에 초대했습니다.\n초대받은 사람은 홈페이지에서 입장하는 동안만 채널이 보입니다.`)], flags: MessageFlags.Ephemeral });
+      }
+      if (interaction.commandName === '집초대취소') {
+        const target = interaction.options.getUser('유저', true);
+        const { rows } = await db.query(`SELECT * FROM dishouse_houses WHERE guild_id=$1 AND owner_id=$2`, [houses.HOUSE_GUILD_ID, interaction.user.id]);
+        const house = rows[0];
+        if (!house) return interaction.reply({ content: '하우스가 없습니다.', flags: MessageFlags.Ephemeral });
+        await houses.removeInvite(db, house.id, target.id);
+        // 즉시 권한도 제거 (온라인 중에 끊기)
+        if (house.channel_id) {
+          const ch = await guild.channels.fetch(house.channel_id).catch(()=>null);
+          if (ch) await ch.permissionOverwrites.delete(target.id).catch(()=>{});
+        }
+        return interaction.reply({ embeds: [successEmbed('❌ 초대 취소', `${target} 님의 초대를 취소했습니다.`)], flags: MessageFlags.Ephemeral });
+      }
+    } catch (e) {
+      console.error('[houses]', e);
+      const payload = { content: `오류: ${e.message}`, flags: MessageFlags.Ephemeral };
+      if (interaction.deferred) return interaction.editReply(payload).catch(()=>{});
+      if (interaction.replied) return interaction.followUp(payload).catch(()=>{});
+      return interaction.reply(payload).catch(()=>{});
     }
   }
 

@@ -239,6 +239,14 @@ const guildCommands = [
   new SlashCommandBuilder().setName('채널초기화').setDescription('DISHOUSE 방 채널 연결을 해제합니다.').addStringOption((o) => o.setName('방').setDescription('방 이름').setRequired(true).addChoices(...DISHOUSE_ROOMS)).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   new SlashCommandBuilder().setName('후원하기').setDescription('DISHOUSE 후원을 신청합니다.').addIntegerOption((o) => o.setName('금액').setDescription('후원 금액(원)').setMinValue(1000).setRequired(true)).addStringOption((o) => o.setName('입금자명').setDescription('입금자명 (예: 홍길동)').setRequired(true)),
   new SlashCommandBuilder().setName('후원랭킹').setDescription('후원 랭킹 채널을 관리합니다').addSubcommand((s) => s.setName('설정').setDescription('랭킹을 게시할 채널을 설정합니다').addChannelOption((o) => o.setName('채널').setDescription('랭킹 채널').addChannelTypes(ChannelType.GuildText).setRequired(true))).addSubcommand((s) => s.setName('제거').setDescription('랭킹 채널을 제거합니다')).addSubcommand((s) => s.setName('조회').setDescription('현재 랭킹 채널을 조회합니다')).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  // 개인 하우스
+  new SlashCommandBuilder().setName('집생성').setDescription('내 개인 하우스를 생성합니다. (자동 채널 생성)'),
+  new SlashCommandBuilder().setName('집삭제').setDescription('내 개인 하우스를 삭제합니다.'),
+  new SlashCommandBuilder().setName('집정보').setDescription('내/다른 유저의 하우스 정보를 봅니다.').addUserOption((o) => o.setName('유저').setDescription('조회할 유저 (없으면 본인)').setRequired(false)),
+  new SlashCommandBuilder().setName('집목록').setDescription('서버의 모든 하우스 목록을 봅니다.'),
+  new SlashCommandBuilder().setName('집설정').setDescription('내 집 공개 설정을 변경합니다.').addStringOption((o) => o.setName('공개').setDescription('공개 범위').setRequired(true).addChoices({ name: '비공개 (나만)', value: 'private' }, { name: '초대만 (초대받은 사람만 입장)', value: 'invite_only' }, { name: '공용 (누구나 입장)', value: 'public' })),
+  new SlashCommandBuilder().setName('집초대').setDescription('내 집에 유저를 초대합니다.').addUserOption((o) => o.setName('유저').setDescription('초대할 유저').setRequired(true)),
+  new SlashCommandBuilder().setName('집초대취소').setDescription('초대를 취소합니다.').addUserOption((o) => o.setName('유저').setDescription('취소할 유저').setRequired(true)),
 ].map((command) => command.toJSON());
 
 const supportCommandNames = new Set(['랭킹채널', '후원금액']);
