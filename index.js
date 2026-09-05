@@ -943,15 +943,28 @@ client.on('interactionCreate', async (interaction) => {
     }
   }
 
-  // 후원은 1538513625730383902 + 전역 모두 허용 (티켓성이라 제한 두지 않음). 필요하면 길드 제한 추가.
+  // 후원은 1538513625730383902 + 전역 허용 — 계좌는 필드로 명확히 표시
   if (interaction.commandName === '후원하기') {
     const amount = interaction.options.getInteger('금액', true);
     const depositor = interaction.options.getString('입금자명', true).trim().slice(0, 30);
     if (amount < 1000) return interaction.reply({ content: '최소 후원 금액은 1,000원입니다.', flags: MessageFlags.Ephemeral });
     const res = dbRun('INSERT INTO donation_requests (guild_id, user_id, amount, depositor, status, created_at) VALUES (?,?,?,?,?,?)', [interaction.guildId, interaction.user.id, amount, depositor, 'pending', Date.now()]);
     const id = res.lastInsertRowid;
-    const embed = new EmbedBuilder().setColor(0x5865f2).setTitle('💛 DISHOUSE 후원 안내').setDescription(`후원 신청이 접수되었습니다.\n\n**계좌번호**\n\`\`\`3333-37-9030802\n카카오뱅크 전민재\`\`\`\n**금액** : **${amount.toLocaleString('ko-KR')}원**\n**입금자명** : **${depositor}**\n**요청 ID** : \`${id}\`\n\n입금 후 아래 **입금 완료** 버튼을 눌러주세요. 제작자 확인 후 역할이 지급됩니다.`).setFooter({ text: '문의: 제작자 DM' }).setTimestamp();
-    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`donation:complete:${id}`).setLabel('입금 완료 알림 보내기').setStyle(ButtonStyle.Primary).setEmoji('✅'));
+    const embed = new EmbedBuilder()
+      .setColor(0xffc857)
+      .setTitle('💛 DISHOUSE 후원 안내')
+      .setDescription('아래 계좌로 입금 후 **입금 완료** 버튼을 눌러주세요. 제작자 확인 후 역할이 지급됩니다.')
+      .addFields(
+        { name: '💳 계좌번호', value: '**3333-37-9030802**', inline: false },
+        { name: '🏦 은행', value: '카카오뱅크', inline: true },
+        { name: '👤 예금주', value: '전민재', inline: true },
+        { name: '💰 금액', value: `**${amount.toLocaleString('ko-KR')}원**`, inline: true },
+        { name: '📝 입금자명', value: `**${depositor}**`, inline: true },
+        { name: '🆔 요청 ID', value: `\`${id}\``, inline: true }
+      )
+      .setFooter({ text: '문의: 제작자 DM · 복사: 3333-37-9030802' })
+      .setTimestamp();
+    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`donation:complete:${id}`).setLabel('입금 완료 알림 보내기').setStyle(ButtonStyle.Success).setEmoji('✅'));
     return interaction.reply({ embeds: [embed], components: [row], flags: MessageFlags.Ephemeral });
   }
 
