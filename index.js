@@ -42,6 +42,43 @@ const db = databaseUrl
   ? new pg.Pool({ connectionString: databaseUrl.toString(), ssl: { rejectUnauthorized: false } })
   : null;
 
+// ── PG helpers: user_progress (XP = 코인) ──────────────────────────────────
+// 코인 = 경험치. PG가 있으면 PG를 사용, 없으면 SQLite fallback.
+function toPgPlayer(row) {
+  if (!row) return row;
+  return {
+    guild_id: row.guild_id,
+    user_id: row.user_id,
+    xp: Number(row.xp),
+    coins: Number(row.coins),
+    level: Number(row.level),
+    messages: Number(row.messages),
+    last_message_at: Number(row.last_message_at),
+    last_nickname_change_at: Number(row.last_nickname_change_at),
+  };
+}
+
+async function ensurePgTables() {
+  if (!db) return;
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS user_progress (
+      guild_id TEXT NOT NULL, user_id TEXT NOT NULL,
+      xp INTEGER NOT NULL DEFAULT 0, coins INTEGER NOT NULL DEFAULT 0,
+      level INTEGER NOT NULL DEFAULT 1, messages INTEGER NOT NULL DEFAULT 0,
+      last_message_at BIGINT NOT NULL DEFAULT 0, last_nickname_change_at BIGINT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY (guild_id, user_id)
+    )`).catch(() => {});
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS dishouse_inventory (
+      guild_id TEXT NOT NULL, user_id TEXT NOT NULL,
+      owned_hats TEXT NOT NULL DEFAULT '[]', owned_colors TEXT NOT NULL DEFAULT '[]',
+      equipped_hat TEXT NOT NULL DEFAULT 'none', equipped_color TEXT NOT NULL DEFAULT '#8b5a2b',
+      created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY (guild_id, user_id)
+    )`).catch(() => {});
+}
+
 function getEntryRoleIds(guildId) {
   const value = readSetting(guildId, 'entry_role_ids');
   return Array.isArray(value) ? value : [];
@@ -289,7 +326,7 @@ async function getLevelSettings(guildId) {
     xp_exponent: 1.9,
     xp_gain_min: 4,
     xp_gain_max: 14,
-    coin_per_xp: 0.75,
+    coin_per_xp: 1,
     message_cooldown_ms: 6000,
     nickname_prefix: 1,
   };
@@ -298,6 +335,11 @@ async function getLevelSettings(guildId) {
 }
 
 async function ensureUserProgress(guildId, userId) {
+  if (db) {
+    await db.query(`INSERT INTO user_progress (guild_id, user_id) VALUES ($1,$2) ON CONFLICT (guild_id, user_id) DO NOTHING`, [guildId, userId]);
+    const { rows } = await db.query(`SELECT * FROM user_progress WHERE guild_id=$1 AND user_id=$2`, [guildId, userId]);
+    return toPgPlayer(rows[0]);
+  }
   await runSql(
     `INSERT OR IGNORE INTO user_progress (guild_id, user_id) VALUES (?, ?)`,
     [guildId, userId]
@@ -449,7 +491,7 @@ async function awardMessageProgress(member, contentLength) {
   if (now - user.last_message_at < settings.message_cooldown_ms) return null;
 
   const xpGain = Math.max(settings.xp_gain_min, Math.min(settings.xp_gain_max, Math.floor(contentLength / 18) + 3));
-  const coinGain = Math.max(1, Math.floor(xpGain * settings.coin_per_xp));
+  const coinGain = xpGain; // 코인 = 경험치 (요청사항) — 1:1
 
   user.last_message_at = now;
   user.messages += 1;
@@ -465,12 +507,19 @@ async function awardMessageProgress(member, contentLength) {
     nextRequirement = getXpRequirement(settings, user.level);
   }
 
-  await runSql(
-    `UPDATE user_progress
-     SET xp = ?, coins = coins + ?, level = ?, messages = ?, last_message_at = ?, last_nickname_change_at = last_nickname_change_at
-     WHERE guild_id = ? AND user_id = ?`,
-    [user.xp, coinGain, user.level, user.messages, user.last_message_at, member.guild.id, member.id]
-  );
+  if (db) {
+    await db.query(
+      `UPDATE user_progress SET xp=$1, coins=coins+$2, level=$3, messages=$4, last_message_at=$5, updated_at=now() WHERE guild_id=$6 AND user_id=$7`,
+      [user.xp, coinGain, user.level, user.messages, String(user.last_message_at), member.guild.id, member.id]
+    );
+  } else {
+    await runSql(
+      `UPDATE user_progress
+       SET xp = ?, coins = coins + ?, level = ?, messages = ?, last_message_at = ?, last_nickname_change_at = last_nickname_change_at
+       WHERE guild_id = ? AND user_id = ?`,
+      [user.xp, coinGain, user.level, user.messages, user.last_message_at, member.guild.id, member.id]
+    );
+  }
 
   if (leveledUp) await applyLevelNickname(member, user.level, settings);
   return { ...user, leveledUp, xpGain, coinGain, nextRequirement };
@@ -637,13 +686,28 @@ async function getPlayer(guildId, userId) {
 async function savePlayer(guildId, userId, patch) {
   const current = await ensureUserProgress(guildId, userId);
   const next = { ...current, ...patch };
-  await runSql(
-    `UPDATE user_progress
-     SET xp = ?, coins = ?, level = ?, messages = ?, last_message_at = ?, last_nickname_change_at = ?
-     WHERE guild_id = ? AND user_id = ?`,
-    [next.xp, next.coins, next.level, next.messages, next.last_message_at, next.last_nickname_change_at, guildId, userId]
-  );
+  if (db) {
+    await db.query(
+      `UPDATE user_progress SET xp=$1, coins=$2, level=$3, messages=$4, last_message_at=$5, last_nickname_change_at=$6, updated_at=now() WHERE guild_id=$7 AND user_id=$8`,
+      [next.xp, next.coins, next.level, next.messages, String(next.last_message_at), String(next.last_nickname_change_at), guildId, userId]
+    );
+  } else {
+    await runSql(
+      `UPDATE user_progress
+       SET xp = ?, coins = ?, level = ?, messages = ?, last_message_at = ?, last_nickname_change_at = ?
+       WHERE guild_id = ? AND user_id = ?`,
+      [next.xp, next.coins, next.level, next.messages, next.last_message_at, next.last_nickname_change_at, guildId, userId]
+    );
+  }
   return next;
+}
+
+async function addCoinsDelta(guildId, userId, delta) {
+  if (db) {
+    await db.query(`UPDATE user_progress SET coins = GREATEST(0, coins + $1), updated_at=now() WHERE guild_id=$2 AND user_id=$3`, [delta, guildId, userId]);
+  } else {
+    await runSql('UPDATE user_progress SET coins = MAX(0, coins + ?) WHERE guild_id = ? AND user_id = ?', [delta, guildId, userId]);
+  }
 }
 
 async function syncLevelSystem(guild) {
@@ -658,7 +722,13 @@ async function syncLevelSystem(guild) {
   for (const member of guild.members.cache.values()) {
     if (member.user.bot) continue;
 
-    const before = await getSql('SELECT 1 FROM user_progress WHERE guild_id = ? AND user_id = ?', [guild.id, member.id]);
+    let before = null;
+    if (db) {
+      const { rows } = await db.query('SELECT 1 FROM user_progress WHERE guild_id=$1 AND user_id=$2', [guild.id, member.id]);
+      before = rows[0] || null;
+    } else {
+      before = await getSql('SELECT 1 FROM user_progress WHERE guild_id = ? AND user_id = ?', [guild.id, member.id]);
+    }
     const user = await ensureUserProgress(guild.id, member.id);
     if (!before) initialized += 1;
 
@@ -682,6 +752,7 @@ async function syncLevelSystem(guild) {
 client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   await initSqlite();
+  await ensurePgTables();
 
   if (db) {
     await db.query('ALTER TABLE user_subscriptions ADD COLUMN IF NOT EXISTS donation_amount INTEGER NOT NULL DEFAULT 0').catch(console.error);
@@ -874,7 +945,7 @@ client.on('interactionCreate', async (interaction) => {
     result = `🎯 정답: **${choice}**  /  결과: **${picked}**\n${reward ? `⚡ 적중! **+${reward} 코인**` : '🫠 빗나갔어요!'}`;
   }
   const coinDelta = reward - ARCADE_BET;
-  await runSql('UPDATE user_progress SET coins = MAX(0, coins + ?) WHERE guild_id = ? AND user_id = ?', [coinDelta, interaction.guildId, interaction.user.id]);
+  await addCoinsDelta(interaction.guildId, interaction.user.id, coinDelta);
   await interaction.editReply(arcadePanel(interaction.user, user.coins, `✨ ${game === 'slots' ? '슬롯 결과' : game === 'dice' ? '주사위 결과' : '코인 러시 결과'}\n\n${result}`));
 });
 
