@@ -1882,7 +1882,7 @@ client.on("interactionCreate", async (interaction) => {
                   .setColor(0x57f287)
                   .setTitle("🏠 하우스 초대")
                   .setDescription(
-                    `**${interaction.user.tag}** 님이 **${house.channel_name}** 하우스에 초대했습니다!\n홈페이지(${process.env.NEXT_PUBLIC_SITE_URL || "https://dishouse.p-e.kr"})에서 입장하면 디스코드 채널 <#${house.channel_id}> 이 나타납니다.`,
+                    `**${interaction.user.tag}** 님이 **${house.channel_name}** 하우스에 초대했습니다!\n홈페이지("https://dishouse.p-e.kr")에서 입장하면 디스코드 채널 <#${house.channel_id}> 이 나타납니다.`,
                   ),
               ],
             })
