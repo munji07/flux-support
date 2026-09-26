@@ -3,7 +3,6 @@ const {
   Client,
   GatewayIntentBits,
   EmbedBuilder,
-  ChannelType,
   MessageFlags,
   PermissionsBitField,
   ActionRowBuilder,
@@ -13,6 +12,12 @@ const {
 const pg = require("pg");
 const path = require("path");
 const { handleSupportInteraction } = require("./src/support/commands.js");
+const {
+  canNotify: donationCanNotify,
+  canDecide: donationCanDecide,
+  approvalTargets: donationApprovalTargets,
+  recordApprovedDonation,
+} = require("./src/support/donation.js");
 const {
   COMMUNITY_GUILD_ID,
   QUESTION_CHANNEL_ID,
@@ -57,7 +62,6 @@ const client = new Client({
 const ADMIN_USER_ID = "1269575955626725390";
 const MODERATOR_ROLE_ID = "1538529402256760884";
 const LEVEL_GUILD_ID = COMMUNITY_GUILD_ID;
-const SUPPORT_GUILD_ID = "1525458537139146812";
 const channelConfigPath = path.join(__dirname, "channel-config.json");
 
 const databaseUrl = process.env.DATABASE_URL
@@ -789,50 +793,6 @@ async function syncGuildRoles(guild) {
   return { updated, failed, failures };
 }
 
-async function publishRankingChannel(guild, channel) {
-  if (!channel || channel.type !== ChannelType.GuildText)
-    throw new Error("텍스트 채널을 선택해 주세요.");
-  if (!db) throw new Error("DATABASE_URL이 설정되어 있지 않습니다.");
-
-  const { rows: columns } = await db.query(`
-    SELECT column_name FROM information_schema.columns
-    WHERE table_name = 'user_subscriptions'
-      AND column_name IN ('donation_amount', 'total_donation', 'total_donation_amount')
-  `);
-  const amountColumn = columns[0]?.column_name;
-  if (!amountColumn) throw new Error("후원금액 컬럼이 없습니다.");
-
-  const { rows } = await db.query(
-    `SELECT user_id, ${amountColumn} AS amount FROM user_subscriptions WHERE ${amountColumn} > 0 ORDER BY ${amountColumn} DESC LIMIT 10`,
-  );
-  const lines = rows.map(
-    (row, index) =>
-      `${index + 1}. <@${row.user_id}> - ${Number(row.amount).toLocaleString("ko-KR")}원`,
-  );
-  const content = `**후원금액 랭킹 TOP 10**\n\n${lines.join("\n") || "등록된 후원자가 없습니다."}`;
-
-  const existing = await db.query(
-    "SELECT message_id FROM donation_ranking_channels WHERE guild_id = $1",
-    [guild.id],
-  );
-  let message = existing.rows[0]?.message_id
-    ? await channel.messages
-        .fetch(existing.rows[0].message_id)
-        .catch(() => null)
-    : null;
-  if (message) await message.edit(content);
-  else message = await channel.send(content);
-
-  await db.query(
-    `
-    INSERT INTO donation_ranking_channels (guild_id, channel_id, message_id)
-    VALUES ($1, $2, $3)
-    ON CONFLICT (guild_id) DO UPDATE SET channel_id = EXCLUDED.channel_id, message_id = EXCLUDED.message_id
-  `,
-    [guild.id, channel.id, message.id],
-  );
-}
-
 async function assignEntryRoles(member) {
   const roleIds = [...new Set(getEntryRoleIds(member.guild.id))];
   if (!roleIds.length) return;
@@ -1251,7 +1211,7 @@ client.on("interactionCreate", async (interaction) => {
             content: "본인의 후원 요청만 처리할 수 있습니다.",
             flags: MessageFlags.Ephemeral,
           });
-        if (row.status !== "pending")
+        if (!donationCanNotify(row.status))
           return interaction.reply({
             content: "이미 처리된 요청입니다.",
             flags: MessageFlags.Ephemeral,
@@ -1293,10 +1253,7 @@ client.on("interactionCreate", async (interaction) => {
             .setLabel("❌ 거절")
             .setStyle(ButtonStyle.Danger),
         );
-        if (adminUser)
-          await adminUser
-            .send({ embeds: [embed], components: [rowBtn] })
-            .catch(() => {});
+        let logChannel = null;
         if (guild) {
           const logChannelId = readSetting(
             DONATION_GUILD_ID,
@@ -1306,19 +1263,46 @@ client.on("interactionCreate", async (interaction) => {
             const ch =
               guild.channels.cache.get(logChannelId) ??
               (await guild.channels.fetch(logChannelId).catch(() => null));
-            if (ch?.isTextBased())
-              await ch
-                .send({ embeds: [embed], components: [rowBtn] })
-                .catch(() => {});
+            if (ch?.isTextBased()) logChannel = ch;
           }
         }
-        return;
+        // 버튼은 한 곳에만 — DM 우선, 불가하면 로그 채널. 나머지는 감사 기록으로만 남긴다.
+        const targets = donationApprovalTargets({
+          dmAvailable: Boolean(adminUser),
+          logChannelAvailable: Boolean(logChannel),
+        });
+        if (targets.interactive === "dm") {
+          const sent = await adminUser
+            .send({ embeds: [embed], components: [rowBtn] })
+            .then(() => true)
+            .catch(() => false);
+          if (!sent) {
+            return interaction.followUp({
+              content:
+                "⚠️ 제작자에게 DM을 보낼 수 없어 로그 채널에 승인 요청을 올렸습니다.",
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+          if (logChannel)
+            await logChannel.send({ embeds: [embed] }).catch(() => {});
+          return;
+        }
+        if (targets.interactive === "channel") {
+          await logChannel
+            .send({ embeds: [embed], components: [rowBtn] })
+            .catch(() => {});
+          return;
+        }
+        return interaction.followUp({
+          content: "⚠️ 승인 요청을 보낼 경로를 찾지 못했습니다. 관리자에게 문의하세요.",
+          flags: MessageFlags.Ephemeral,
+        });
       }
       if (action === "confirm" || action === "reject") {
         if (
           interaction.user.id !== ADMIN_USER_ID &&
           !hasModeratorRole(interaction.member) &&
-          !interaction.member.permissions.has(
+          !interaction.member?.permissions?.has(
             PermissionsBitField.Flags.ManageGuild,
           )
         ) {
@@ -1333,12 +1317,14 @@ client.on("interactionCreate", async (interaction) => {
             content: "요청을 찾을 수 없습니다.",
             flags: MessageFlags.Ephemeral,
           });
-        if (row.status === "confirmed" || row.status === "rejected")
+        if (!donationCanDecide(row.status))
           return interaction.reply({
             content: "이미 처리된 요청입니다.",
             flags: MessageFlags.Ephemeral,
           });
         if (action === "confirm") {
+          // 역할 지급·PG 반영에 REST가 여럿 걸리므로 먼저 ack
+          await safeDeferUpdate(interaction);
           dbRun(
             "UPDATE donation_requests SET status='confirmed', confirmed_at=? WHERE id=?",
             [Date.now(), id],
@@ -1367,8 +1353,24 @@ client.on("interactionCreate", async (interaction) => {
               }
             }
           } else roleError = "디스하우스 서버를 찾을 수 없습니다.";
-          await interaction.update({
-            content: `후원 확인 완료 — <@${row.user_id}> ${Number(row.amount).toLocaleString()}원 (${row.depositor})`,
+          // 랭킹·티어 원장(PG) 갱신 — 이것이 없으면 승인만 하고 등급이 안 오른다
+          const ledger = await recordApprovedDonation(
+            db,
+            row.user_id,
+            row.amount,
+          );
+          if (!ledger.applied) console.error("[donation] ledger sync failed", ledger.error);
+          const summary = [
+            `후원 확인 완료 — <@${row.user_id}> ${Number(row.amount).toLocaleString()}원 (${row.depositor})`,
+            ledger.applied
+              ? `누적 ${ledger.total.toLocaleString("ko-KR")}원 · 등급 ${ledger.tier.toUpperCase()}`
+              : "⚠️ 후원금액 원장 반영 실패 — `/후원금액 추가`로 수동 반영 필요",
+            roleGiven ? "" : `⚠️ 역할 지급 실패: ${roleError}`,
+          ]
+            .filter(Boolean)
+            .join("\n");
+          await interaction.editReply({
+            content: summary,
             embeds: [],
             components: [],
           });
@@ -2990,30 +2992,6 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    if (interaction.commandName === "랭킹채널") {
-      if (interaction.guildId !== SUPPORT_GUILD_ID)
-        return interaction.reply({
-          content: "지정된 서버에서만 사용할 수 있습니다.",
-          flags: MessageFlags.Ephemeral,
-        });
-      if (interaction.user.id !== ADMIN_USER_ID)
-        return interaction.reply({
-          content: "관리자만 사용할 수 있습니다.",
-          flags: MessageFlags.Ephemeral,
-        });
-      if (!interaction.guild)
-        return interaction.reply({
-          content: "서버에서만 사용할 수 있습니다.",
-          flags: MessageFlags.Ephemeral,
-        });
-      const channel = interaction.options.getChannel("채널");
-      await publishRankingChannel(interaction.guild, channel);
-      return interaction.reply({
-        content: `${channel} 채널에 랭킹 게시를 설정했습니다.`,
-        flags: MessageFlags.Ephemeral,
-      });
-    }
-
     if (
       interaction.commandName === "경고" ||
       interaction.commandName === "추방" ||
@@ -3222,71 +3200,6 @@ client.on("interactionCreate", async (interaction) => {
         ],
         flags: MessageFlags.Ephemeral,
       });
-    }
-
-    if (interaction.commandName !== "후원금액") return;
-    if (interaction.guildId !== SUPPORT_GUILD_ID)
-      return interaction.reply({
-        content: "지정된 서버에서만 사용할 수 있습니다.",
-        flags: MessageFlags.Ephemeral,
-      });
-    if (interaction.user.id !== ADMIN_USER_ID)
-      return interaction.reply({
-        content: "관리자만 사용할 수 있습니다.",
-        flags: MessageFlags.Ephemeral,
-      });
-    if (!db)
-      return interaction.reply({
-        content: "DATABASE_URL이 설정되어 있지 않습니다.",
-        flags: MessageFlags.Ephemeral,
-      });
-
-    const target = interaction.options.getUser("유저");
-    const action = interaction.options.getSubcommand();
-
-    try {
-      if (action === "조회") {
-        const { rows } = await db.query(
-          "SELECT donation_amount FROM user_subscriptions WHERE user_id = $1",
-          [target.id],
-        );
-        const amount = Number(rows[0]?.donation_amount || 0);
-        return interaction.reply({
-          content: `${target}의 누적 후원금액은 **${amount.toLocaleString("ko-KR")}원** 입니다.`,
-          flags: MessageFlags.Ephemeral,
-        });
-      }
-      const delta =
-        interaction.options.getInteger("금액") * (action === "감소" ? -1 : 1);
-      const { rows } = await db.query(
-        `INSERT INTO user_subscriptions (user_id, tier, donation_amount, created_at, updated_at)
-       VALUES ($1, 'free', GREATEST($2, 0), NOW(), NOW())
-       ON CONFLICT (user_id) DO UPDATE SET donation_amount = GREATEST(user_subscriptions.donation_amount + $3, 0), updated_at = NOW()
-       RETURNING donation_amount`,
-        [target.id, Math.max(delta, 0), delta],
-      );
-      const amount = Number(rows[0].donation_amount);
-      const tier =
-        amount >= 5000 ? "premium" : amount >= 3000 ? "basic" : "free";
-      await db.query(
-        "UPDATE user_subscriptions SET tier = $1, updated_at = NOW() WHERE user_id = $2",
-        [tier, target.id],
-      );
-      return interaction.reply({
-        content: `${target}의 후원금액을 ${action === "추가" ? "추가" : "감소"}했습니다.\n- 누적 금액: **${amount.toLocaleString("ko-KR")}원**\n- 적용 티어: **${tier.toUpperCase()}**`,
-        flags: MessageFlags.Ephemeral,
-      });
-    } catch (error) {
-      console.error("Donation amount command error:", error);
-      try {
-        const p = {
-          content: "후원금액 처리 중 오류가 발생했습니다.",
-          flags: MessageFlags.Ephemeral,
-        };
-        if (interaction.deferred) await interaction.editReply(p);
-        else if (interaction.replied) await interaction.followUp(p);
-        else await interaction.reply(p);
-      } catch {}
     }
   } catch (error) {
     if (error?.code === 10062 || error?.code === 40060) {
