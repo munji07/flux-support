@@ -267,7 +267,7 @@ const guildCommands = [
         .setRequired(true),
     ),
   new SlashCommandBuilder()
-    .setName("후원금액")
+    .setName("후원")
     .setDescription("유저의 누적 후원금액을 관리합니다.")
     .addSubcommand((subcommand) =>
       subcommand
@@ -702,7 +702,7 @@ new SlashCommandBuilder()
     )
 ].map((command) => command.toJSON());
 
-const supportCommandNames = new Set(["랭킹채널", "후원금액"]);
+const supportCommandNames = new Set(["랭킹채널", "후원"]);
 const supportCommands = guildCommands.filter((command) =>
   supportCommandNames.has(command.name),
 );
@@ -754,6 +754,14 @@ async function main() {
   console.log(`서포트 서버 커맨드 ${supportCommands.length}개 등록 완료.`);
   console.log("서버별 슬래시 커맨드 배포가 완료되었습니다.");
 }
+
+module.exports = {
+  guildCommands,
+  globalCommands,
+  supportCommands,
+  communityCommands,
+  globalCommandsToRegister,
+};
 
 if (require.main === module) {
   main().catch((error) => {

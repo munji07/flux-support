@@ -7,6 +7,7 @@ const {
   approvalTargets,
   tierFor,
   recordApprovedDonation,
+  applyLedgerDelta,
 } = require("../src/support/donation.js");
 
 function fakePg(donationAmount) {
@@ -101,4 +102,65 @@ test("PG 조회가 실패해도 예외를 던지지 않고 미반영으로 보�
   };
   const result = await recordApprovedDonation(db, "u1", 5000);
   assert.strictEqual(result.applied, false);
+});
+
+test("원장 증가분은 양수로 전달된다", async () => {
+  const db = fakePg(8000);
+  const result = await applyLedgerDelta(db, "u1", 5000);
+  assert.strictEqual(result.applied, true);
+  assert.strictEqual(result.total, 8000);
+  assert.strictEqual(result.tier, "premium");
+});
+
+test("원장 감소분은 음수로 전달되고 결과는 0 미만으로 내려가지 않는다", async () => {
+  const db = fakePg(0);
+  const result = await applyLedgerDelta(db, "u1", -99999);
+  assert.strictEqual(result.applied, true);
+  assert.strictEqual(result.total, 0, "음수가 되지 않아야 함");
+  assert.strictEqual(result.tier, "free");
+  assert.ok(
+    db.calls[0].sql.includes("GREATEST"),
+    "upsert가 GREATEST로 하한을 강제해야 함",
+  );
+});
+
+test("감소 후 티어도 새 누적액 기준으로 재계산된다", async () => {
+  const db = fakePg(3500);
+  const result = await applyLedgerDelta(db, "u1", -1000);
+  assert.strictEqual(result.total, 3500);
+  assert.strictEqual(result.tier, "basic", "3500원은 basic");
+});
+
+test("PG가 없으면 원장 조작은 미반영으로 보고되고 예외를 던지지 않는다", async () => {
+  const result = await applyLedgerDelta(null, "u1", 5000);
+  assert.strictEqual(result.applied, false);
+  assert.strictEqual(result.total, 0);
+});
+
+test("PG 조회가 실패해도 원장 조작은 예외를 던지지 않는다", async () => {
+  const db = {
+    query: async () => {
+      throw new Error("connection terminated");
+    },
+  };
+  const result = await applyLedgerDelta(db, "u1", 5000);
+  assert.strictEqual(result.applied, false);
+});
+
+test("수동 /후원 추가와 자동 승인은 완전히 동일한 쿼리를 실행한다", async () => {
+  const manualDb = fakePg(8000);
+  const autoDb = fakePg(8000);
+  const manual = await applyLedgerDelta(manualDb, "u1", 5000);
+  const auto = await recordApprovedDonation(autoDb, "u1", 5000);
+  assert.deepStrictEqual(manual, auto, "결과 객체가 동일해야 함");
+  assert.deepStrictEqual(
+    manualDb.calls.map((c) => c.sql),
+    autoDb.calls.map((c) => c.sql),
+    "실행 SQL이 동일해야 함 — 갈라지면 원래 버그가 재발한다",
+  );
+  assert.deepStrictEqual(
+    manualDb.calls.map((c) => c.params),
+    autoDb.calls.map((c) => c.params),
+    "파라미터도 동일해야 함",
+  );
 });

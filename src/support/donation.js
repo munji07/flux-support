@@ -29,8 +29,9 @@ function tierFor(amount) {
   return amount >= 5000 ? "premium" : amount >= 3000 ? "basic" : "free";
 }
 
-async function recordApprovedDonation(db, userId, amount) {
+async function applyLedgerDelta(db, userId, delta) {
   if (!db) return { applied: false, total: 0, tier: "free" };
+  const amount = Number(delta) || 0;
   try {
     const { rows } = await db.query(
       `INSERT INTO user_subscriptions (user_id, tier, donation_amount, created_at, updated_at)
@@ -39,7 +40,7 @@ async function recordApprovedDonation(db, userId, amount) {
          SET donation_amount = GREATEST(user_subscriptions.donation_amount + $3, 0),
              updated_at = NOW()
        RETURNING donation_amount`,
-      [userId, Math.max(Number(amount) || 0, 0), Number(amount) || 0],
+      [userId, Math.max(amount, 0), amount],
     );
     const total = Number(rows[0]?.donation_amount || 0);
     const tier = tierFor(total);
@@ -53,6 +54,10 @@ async function recordApprovedDonation(db, userId, amount) {
   }
 }
 
+function recordApprovedDonation(db, userId, amount) {
+  return applyLedgerDelta(db, userId, Math.abs(Number(amount) || 0));
+}
+
 module.exports = {
   TERMINAL_STATUSES,
   canNotify,
@@ -60,5 +65,6 @@ module.exports = {
   applyDonationToLedger,
   approvalTargets,
   tierFor,
+  applyLedgerDelta,
   recordApprovedDonation,
 };

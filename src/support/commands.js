@@ -1,4 +1,5 @@
 const { ChannelType, MessageFlags } = require("discord.js");
+const { applyLedgerDelta } = require("./donation.js");
 
 const SUPPORT_GUILD_ID = "1525458537139146812";
 const ADMIN_USER_ID = "1269575955626725390";
@@ -46,7 +47,7 @@ async function publishRankingChannel(db, guild, channel) {
 }
 
 async function handleSupportInteraction(interaction, db) {
-  if (!["랭킹채널", "후원금액"].includes(interaction.commandName)) return false;
+  if (!["랭킹채널", "후원"].includes(interaction.commandName)) return false;
 
   if (interaction.guildId !== SUPPORT_GUILD_ID) {
     await interaction.reply({
@@ -96,23 +97,13 @@ async function handleSupportInteraction(interaction, db) {
       return true;
     }
 
+    // 승인 자동 반영 경로와 동일한 공유 로직을 쓴다 — 갈라지면 원장 불일치가 재발한다
     const delta =
       interaction.options.getInteger("금액") * (action === "감소" ? -1 : 1);
-    const { rows } = await db.query(
-      `INSERT INTO user_subscriptions (user_id, tier, donation_amount, created_at, updated_at)
-       VALUES ($1, 'free', GREATEST($2, 0), NOW(), NOW())
-       ON CONFLICT (user_id) DO UPDATE SET donation_amount = GREATEST(user_subscriptions.donation_amount + $3, 0), updated_at = NOW()
-       RETURNING donation_amount`,
-      [target.id, Math.max(delta, 0), delta],
-    );
-    const amount = Number(rows[0].donation_amount);
-    const tier = amount >= 5000 ? "premium" : amount >= 3000 ? "basic" : "free";
-    await db.query(
-      "UPDATE user_subscriptions SET tier = $1, updated_at = NOW() WHERE user_id = $2",
-      [tier, target.id],
-    );
+    const ledger = await applyLedgerDelta(db, target.id, delta);
+    if (!ledger.applied) throw ledger.error ?? new Error("원장 반영 실패");
     await interaction.reply({
-      content: `${target}의 후원금액을 ${action === "추가" ? "추가" : "감소"}했습니다.\n- 누적 금액: **${amount.toLocaleString("ko-KR")}원**\n- 적용 티어: **${tier.toUpperCase()}**`,
+      content: `${target}의 후원금액을 ${action === "추가" ? "추가" : "감소"}했습니다.\n- 누적 금액: **${ledger.total.toLocaleString("ko-KR")}원**\n- 적용 티어: **${ledger.tier.toUpperCase()}**`,
       flags: MessageFlags.Ephemeral,
     });
   } catch (error) {

@@ -1364,7 +1364,7 @@ client.on("interactionCreate", async (interaction) => {
             `후원 확인 완료 — <@${row.user_id}> ${Number(row.amount).toLocaleString()}원 (${row.depositor})`,
             ledger.applied
               ? `누적 ${ledger.total.toLocaleString("ko-KR")}원 · 등급 ${ledger.tier.toUpperCase()}`
-              : "⚠️ 후원금액 원장 반영 실패 — `/후원금액 추가`로 수동 반영 필요",
+              : "⚠️ 후원금액 원장 반영 실패 — `/후원 추가`로 수동 반영 필요",
             roleGiven ? "" : `⚠️ 역할 지급 실패: ${roleError}`,
           ]
             .filter(Boolean)
