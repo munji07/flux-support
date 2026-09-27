@@ -13,5 +13,9 @@ test("conflict_relations 테이블 초기화는 반복 실행해도 안전하다
       .get().name,
     "conflict_relations",
   );
+  assert.equal(
+    db.prepare("SELECT name FROM sqlite_master WHERE name = 'conflict_events'").get().name,
+    "conflict_events",
+  );
   db.close();
 });
