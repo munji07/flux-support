@@ -17,11 +17,12 @@ function mentionIds(mentions) {
 }
 
 class ConflictGuard {
-  constructor({ detector, store, ignoredChannels = [], now = Date.now }) {
+  constructor({ detector, store, ignoredChannels = [], now = Date.now, logger = null }) {
     this.detector = detector;
     this.store = store;
     this.ignoredChannels = new Set(ignoredChannels.map(String));
     this.now = now;
+    this.logger = logger;
   }
 
   async handleMessage(message) {
@@ -50,6 +51,8 @@ class ConflictGuard {
     }
 
     const relation = this.store.get(message.guild.id, authorId, targetId);
+    const scoreBefore = relation.conflictScore;
+    const stateBefore = relation.state || "NORMAL";
     const now = this.now();
     const elapsedMs = relation.lastInteractionAt == null
       ? 0
@@ -88,6 +91,22 @@ class ConflictGuard {
     relation.exchanges += 1;
     relation.state = transitionConflictState(relation, detected, now);
     this.store.save(relation);
+    if (this.logger) {
+      try {
+        this.logger.record({
+          guildId: relation.guildId,
+          relationKey: relation.relationKey,
+          type: detected.type,
+          stateBefore,
+          stateAfter: relation.state,
+          scoreBefore,
+          scoreAfter: relation.conflictScore,
+          timestamp: now,
+        });
+      } catch (error) {
+        console.error("Conflict Logger error:", error);
+      }
+    }
     return { ignored: false, detected: true, relation, signal: detected };
   }
 }

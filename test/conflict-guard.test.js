@@ -68,6 +68,24 @@ test("멘션 대상이 있는 공격은 관계 점수를 증가시키고 저장�
   assert.equal(relations.get("guild:111:222").conflictScore, 8);
 });
 
+test("공격 처리 후 점수·상태 전후 이벤트를 기록한다", async () => {
+  const events = [];
+  const { guard, relations } = makeGuard({ logger: { record: (event) => events.push(event) } });
+  await guard.handleMessage(makeMessage());
+  assert.equal(events.length, 1);
+  assert.equal(events[0].scoreBefore, 0);
+  assert.equal(events[0].scoreAfter, relations.get("guild:111:222").conflictScore);
+  assert.equal(events[0].stateBefore, "NORMAL");
+  assert.equal(events[0].stateAfter, "SUSPICIOUS");
+  assert.equal("messageContent" in events[0], false);
+});
+
+test("Logger 오류는 관계 저장과 메시지 처리를 실패시키지 않는다", async () => {
+  const { guard, relations } = makeGuard({ logger: { record: () => { throw new Error("log down"); } } });
+  await assert.doesNotReject(() => guard.handleMessage(makeMessage()));
+  assert.equal(relations.get("guild:111:222").conflictScore, 8);
+});
+
 test("대상 없는 공격은 저장소를 호출하지 않는다", async () => {
   let saves = 0;
   const { guard } = makeGuard({

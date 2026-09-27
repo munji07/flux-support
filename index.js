@@ -32,6 +32,7 @@ const categoryReset = require("./src/community/admin.js");
 const { ConflictDetector } = require("./src/conflict/ConflictDetector.js");
 const { ConflictGuard } = require("./src/conflict/ConflictGuard.js");
 const { ConflictStore } = require("./src/conflict/ConflictStore.js");
+const { ConflictLogger } = require("./src/conflict/ConflictLogger.js");
 const {
   runSql,
   getSql,
@@ -82,9 +83,12 @@ const db = databaseUrl
     })
   : null;
 
+const conflictLogger = new ConflictLogger({ runSql, getSql, allSql: dbAll });
+conflictLogger.ensureTable();
 const conflictGuard = new ConflictGuard({
   detector: new ConflictDetector(),
   store: new ConflictStore({ runSql, getSql, allSql: dbAll }),
+  logger: conflictLogger,
   ignoredChannels: (process.env.CONFLICT_IGNORED_CHANNELS || "")
     .split(",")
     .map((channelId) => channelId.trim())
