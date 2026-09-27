@@ -29,6 +29,9 @@ const { createIdleChat } = require("./src/community/idle-chat");
 const { createBalanceGame } = require("./src/community/balance-game");
 const { isCommunityCommand } = require("./src/community/commands");
 const categoryReset = require("./src/community/admin.js");
+const { ConflictDetector } = require("./src/conflict/ConflictDetector.js");
+const { ConflictGuard } = require("./src/conflict/ConflictGuard.js");
+const { ConflictStore } = require("./src/conflict/ConflictStore.js");
 const {
   runSql,
   getSql,
@@ -78,6 +81,15 @@ const db = databaseUrl
       ssl: { rejectUnauthorized: false },
     })
   : null;
+
+const conflictGuard = new ConflictGuard({
+  detector: new ConflictDetector(),
+  store: new ConflictStore({ runSql, getSql }),
+  ignoredChannels: (process.env.CONFLICT_IGNORED_CHANNELS || "")
+    .split(",")
+    .map((channelId) => channelId.trim())
+    .filter(Boolean),
+});
 
 // ── PG helpers: user_progress (XP = 코인) ──────────────────────────────────
 // 코인 = 경험치. PG가 있으면 PG를 사용, 없으면 SQLite fallback.
@@ -1036,6 +1048,9 @@ client.on("messageCreate", async (message) => {
   if (message.author?.bot) return;
   idleChat.handleMessage(message);
   balanceGame.handleMessage(message);
+  conflictGuard.handleMessage(message).catch((error) => {
+    console.error("Conflict Guard error:", error);
+  });
   if (!message.guild || message.guild.id !== LEVEL_GUILD_ID) return;
   if (!message.content) return;
   if (!message.member) return;
