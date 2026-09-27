@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const Database = require("better-sqlite3");
 const { ensureCoreTables } = require("../lib/database.js");
 
-test("ensures level and friend alert tables before event handling", () => {
+test("ensures core tables before event handling", () => {
   const db = new Database(":memory:");
 
   ensureCoreTables(db);
@@ -13,6 +13,10 @@ test("ensures level and friend alert tables before event handling", () => {
     .all()
     .map((row) => row.name);
 
-  assert.deepEqual(tables.sort(), ["friend_alerts", "level_settings"]);
+  assert.deepEqual(tables.sort(), [
+    "conflict_relations",
+    "friend_alerts",
+    "level_settings",
+  ]);
   db.close();
 });
