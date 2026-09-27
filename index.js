@@ -84,7 +84,7 @@ const db = databaseUrl
 
 const conflictGuard = new ConflictGuard({
   detector: new ConflictDetector(),
-  store: new ConflictStore({ runSql, getSql }),
+  store: new ConflictStore({ runSql, getSql, allSql: dbAll }),
   ignoredChannels: (process.env.CONFLICT_IGNORED_CHANNELS || "")
     .split(",")
     .map((channelId) => channelId.trim())

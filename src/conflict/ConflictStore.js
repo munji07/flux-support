@@ -2,6 +2,7 @@ const {
   getRelationKey,
   createConflictRelation,
 } = require("./ConflictRelation.js");
+const { normalizeState } = require("./ConflictState.js");
 
 const CREATE_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS conflict_relations (
@@ -16,17 +17,25 @@ const CREATE_TABLE_SQL = `
     consecutive_escalations INTEGER NOT NULL DEFAULT 0,
     recent_attacks TEXT NOT NULL DEFAULT '{}',
     exchanges INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'NORMAL',
     PRIMARY KEY (guild_id, relation_key)
   )`;
 
 class ConflictStore {
-  constructor({ runSql, getSql }) {
+  constructor({ runSql, getSql, allSql }) {
     this.runSql = runSql;
     this.getSql = getSql;
+    this.allSql = allSql;
   }
 
   ensureTable() {
     this.runSql(CREATE_TABLE_SQL);
+    const columns = this.allSql?.("PRAGMA table_info(conflict_relations)") ?? [];
+    if (!columns.some((column) => column.name === "state")) {
+      this.runSql(
+        "ALTER TABLE conflict_relations ADD COLUMN state TEXT NOT NULL DEFAULT 'NORMAL'",
+      );
+    }
   }
 
   get(guildId, userA, userB) {
@@ -57,6 +66,7 @@ class ConflictStore {
       consecutiveEscalations: Number(row.consecutive_escalations),
       recentAttacks,
       exchanges: Number(row.exchanges),
+      state: normalizeState(row.state),
     };
   }
 
@@ -65,8 +75,8 @@ class ConflictStore {
       `INSERT INTO conflict_relations (
         guild_id, relation_key, user_a, user_b, conflict_score,
         last_interaction_at, last_increase_at, last_intervention_at,
-        consecutive_escalations, recent_attacks, exchanges
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        consecutive_escalations, recent_attacks, exchanges, state
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT (guild_id, relation_key) DO UPDATE SET
         user_a = excluded.user_a,
         user_b = excluded.user_b,
@@ -76,7 +86,8 @@ class ConflictStore {
         last_intervention_at = excluded.last_intervention_at,
         consecutive_escalations = excluded.consecutive_escalations,
         recent_attacks = excluded.recent_attacks,
-        exchanges = excluded.exchanges`,
+        exchanges = excluded.exchanges,
+        state = excluded.state`,
       [
         relation.guildId,
         relation.relationKey || getRelationKey(relation.userA, relation.userB),
@@ -89,6 +100,7 @@ class ConflictStore {
         relation.consecutiveEscalations,
         JSON.stringify(relation.recentAttacks),
         relation.exchanges,
+        normalizeState(relation.state),
       ],
     );
     return relation;
