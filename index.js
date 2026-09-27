@@ -1001,7 +1001,6 @@ async function syncLevelSystem(guild) {
 
 client.once("clientReady", async () => {
   console.log(`Logged in as ${client.user.tag}`);
-  await initSqlite();
   await ensurePgTables();
   await houses.ensureHouseTables(db);
 
@@ -3301,4 +3300,12 @@ client.on("guildMemberRemove", async (member) => {
   await channel.send({ embeds: [embed] });
 });
 
-client.login(process.env.DISCORD_TOKEN);
+async function start() {
+  await initSqlite();
+  await client.login(process.env.DISCORD_TOKEN);
+}
+
+start().catch((error) => {
+  console.error("초기화 실패:", error);
+  process.exit(1);
+});
