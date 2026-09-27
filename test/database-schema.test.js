@@ -14,9 +14,11 @@ test("ensures core tables before event handling", () => {
     .map((row) => row.name);
 
   assert.deepEqual(tables.sort(), [
+    "conflict_events",
     "conflict_relations",
     "friend_alerts",
     "level_settings",
+    "sqlite_sequence",
   ]);
   db.close();
 });
