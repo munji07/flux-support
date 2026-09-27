@@ -22,6 +22,7 @@ test("새 관계는 양방향 공격 카운트를 포함한 기본 상태를 가
     userA: "111",
     userB: "222",
     conflictScore: 0,
+    state: "NORMAL",
     lastInteractionAt: null,
     lastIncreaseAt: null,
     lastInterventionAt: null,

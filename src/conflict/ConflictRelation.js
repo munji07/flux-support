@@ -19,6 +19,7 @@ function createConflictRelation(guildId, userA, userB) {
     userA: normalizedA,
     userB: normalizedB,
     conflictScore: 0,
+    state: "NORMAL",
     lastInteractionAt: null,
     lastIncreaseAt: null,
     lastInterventionAt: null,
