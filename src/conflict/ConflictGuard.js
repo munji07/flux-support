@@ -7,6 +7,7 @@ const {
   CONFLICT_DEESCALATION_SCORE,
 } = require("./config.js");
 const { decayScore, increaseScore } = require("./ConflictScore.js");
+const { transitionConflictState } = require("./ConflictStateMachine.js");
 
 function mentionIds(mentions) {
   if (Array.isArray(mentions)) return mentions.map(String);
@@ -85,6 +86,7 @@ class ConflictGuard {
     relation.lastInteractionAt = now;
     if (!detected.isDeescalation) relation.lastIncreaseAt = now;
     relation.exchanges += 1;
+    relation.state = transitionConflictState(relation, detected, now);
     this.store.save(relation);
     return { ignored: false, detected: true, relation, signal: detected };
   }

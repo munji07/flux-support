@@ -21,6 +21,11 @@ function transitionConflictState(relation, signal = {}, now = Date.now()) {
     return relation.state;
   }
 
+  if (signal.type === "MUTUAL_ATTACK") {
+    relation.state = CONFLICT_STATES.CONFLICT;
+    return relation.state;
+  }
+
   if (current === CONFLICT_STATES.NORMAL) {
     relation.state = CONFLICT_STATES.SUSPICIOUS;
   } else if (current === CONFLICT_STATES.SUSPICIOUS) {

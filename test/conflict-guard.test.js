@@ -141,3 +141,25 @@ test("60초 밖의 이전 공격은 상호 공격 가중치에 사용하지 않�
   assert.equal(result.relation.conflictScore, expectedScore);
   assert.equal(relations.get("111:222").conflictScore, expectedScore);
 });
+
+test("첫 공격은 관계를 SUSPICIOUS로 저장한다", async () => {
+  const { guard, relations } = makeGuard();
+  await guard.handleMessage(makeMessage());
+  assert.equal(relations.get("guild:111:222").state, "SUSPICIOUS");
+});
+
+test("상호 공격은 관계를 CONFLICT로 저장한다", async () => {
+  const { guard, relations } = makeGuard({
+    detector: {
+      detect: () => ({
+        hasSignal: true,
+        targetUserId: "222",
+        type: "MUTUAL_ATTACK",
+        isDeescalation: false,
+        isThreat: false,
+      }),
+    },
+  });
+  await guard.handleMessage(makeMessage());
+  assert.equal(relations.get("guild:111:222").state, "CONFLICT");
+});
