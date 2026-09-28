@@ -33,6 +33,7 @@ const { ConflictDetector } = require("./src/conflict/ConflictDetector.js");
 const { ConflictGuard } = require("./src/conflict/ConflictGuard.js");
 const { ConflictStore } = require("./src/conflict/ConflictStore.js");
 const { ConflictLogger } = require("./src/conflict/ConflictLogger.js");
+const { InterventionManager } = require("./src/conflict/InterventionManager.js");
 const {
   runSql,
   getSql,
@@ -85,10 +86,18 @@ const db = databaseUrl
 
 const conflictLogger = new ConflictLogger({ runSql, getSql, allSql: dbAll });
 conflictLogger.ensureTable();
+const conflictInterventionManager = new InterventionManager({
+  getChannel: (message) => message.channel,
+  getModeratorChannel: (message) => {
+    const channelId = process.env.CONFLICT_MODERATOR_CHANNEL_ID;
+    return channelId ? message.guild?.channels?.cache?.get(channelId) : null;
+  },
+});
 const conflictGuard = new ConflictGuard({
   detector: new ConflictDetector(),
   store: new ConflictStore({ runSql, getSql, allSql: dbAll }),
   logger: conflictLogger,
+  interventionManager: conflictInterventionManager,
   ignoredChannels: (process.env.CONFLICT_IGNORED_CHANNELS || "")
     .split(",")
     .map((channelId) => channelId.trim())

@@ -17,12 +17,13 @@ function mentionIds(mentions) {
 }
 
 class ConflictGuard {
-  constructor({ detector, store, ignoredChannels = [], now = Date.now, logger = null }) {
+  constructor({ detector, store, ignoredChannels = [], now = Date.now, logger = null, interventionManager = null }) {
     this.detector = detector;
     this.store = store;
     this.ignoredChannels = new Set(ignoredChannels.map(String));
     this.now = now;
     this.logger = logger;
+    this.interventionManager = interventionManager;
   }
 
   async handleMessage(message) {
@@ -85,12 +86,23 @@ class ConflictGuard {
       relation.consecutiveEscalations += 1;
     }
 
+    if (withinWindow && targetAttacks > 0 && !detected.isDeescalation) {
+      detected.type = "MUTUAL_ATTACK";
+    }
+    relation.state = transitionConflictState(relation, detected, now);
     relation.recentAttacks[authorId] = authorAttacks + (detected.isDeescalation ? 0 : 1);
     relation.lastInteractionAt = now;
     if (!detected.isDeescalation) relation.lastIncreaseAt = now;
     relation.exchanges += 1;
-    relation.state = transitionConflictState(relation, detected, now);
     this.store.save(relation);
+    let intervention = null;
+    if (this.interventionManager) {
+      intervention = await this.interventionManager.handle({ relation, message });
+      if (intervention.at) {
+        relation.lastInterventionAt = intervention.at;
+        this.store.save(relation);
+      }
+    }
     if (this.logger) {
       try {
         this.logger.record({
@@ -107,7 +119,7 @@ class ConflictGuard {
         console.error("Conflict Logger error:", error);
       }
     }
-    return { ignored: false, detected: true, relation, signal: detected };
+    return { ignored: false, detected: true, relation, signal: detected, intervention };
   }
 }
 
