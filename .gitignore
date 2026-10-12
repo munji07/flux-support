@@ -1,0 +1,9 @@
+AGENTS.md
+.env
+progress.db
+progress.db-shm
+progress.db-wal
+node_modules/
+secret.sqlite
+secret.sqlite-shm
+secret.sqlite-wal

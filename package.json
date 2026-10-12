@@ -1,0 +1,17 @@
+{
+  "name": "help-bot",
+  "version": "1.0.0",
+  "description": "FLUX help bot with community levels and server protection",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "deploy": "node deploy-commands.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "discord.js": "^14.18.0",
+    "dotenv": "^16.4.7",
+    "pg": "^8.22.0"
+  }
+}

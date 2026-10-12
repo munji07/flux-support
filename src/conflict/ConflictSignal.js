@@ -1,0 +1,60 @@
+const ATTACK_PATTERNS = [
+  /ㅂㅅ/u,
+  /ㅄ/u,
+  /ㅈㄴ/u,
+  /ㄲㅈ/u,
+  /ㄷㅊ/u,
+  /병신/u,
+  /멍청(?:이|하|해|아|이야|함)/u,
+  /개소리/u,
+  /개같은/u,
+  /개새끼/u,
+  /시발/u,
+  /씨발/u,
+  /시발련/u,
+  /씨발련/u,
+  /시발년/u,
+  /씨발년/u,
+  /새끼/u,
+  /좆/u,
+  /존나/u,
+  /지랄/u,
+  /찐따/u,
+  /쓰레기/u,
+  /한심/u,
+  /무능/u,
+  /한심한/u,
+  /꺼져/u,
+  /꺼지라/u,
+  /닥쳐/u,
+  /닥치라/u,
+  /뒤져/u,
+  /죽어/u,
+];
+
+const THREAT_PATTERNS = [
+  /죽여/u,
+  /죽인다/u,
+  /죽여버린다/u,
+  /죽여버릴/u,
+  /가만\s*안\s*둬/u,
+  /찾아간다/u,
+  /두고\s*보자/u,
+  /때려/u,
+  /패버리/u,
+];
+
+const DEESCALATION_PATTERNS = [
+  /미안/u,
+  /내가\s*예민했음/u,
+  /그만하자/u,
+  /알겠음/u,
+  /됐어/u,
+  /괜찮음/u,
+];
+
+module.exports = {
+  ATTACK_PATTERNS,
+  THREAT_PATTERNS,
+  DEESCALATION_PATTERNS,
+};
