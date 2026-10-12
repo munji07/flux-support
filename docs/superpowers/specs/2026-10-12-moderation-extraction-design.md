@@ -272,7 +272,7 @@ if (punishment.type === "timeout") return `타임아웃 ${punishment.minutes}분
 - [ ] `npm test` 통과 (기존 11개 + 신규 테스트 전부)
 - [ ] `node --check index.js` 통과
 - [ ] `node --check src/moderation/index.js` 통과
-- [ ] `index.js` 라인 수가 3,406에서 3,270 이하로 감소 (§4.5의 유지 결정 반영)
+- [ ] `index.js` 라인 수가 3,406에서 3,290이 된다 (제거 125줄, 추가 9줄. §4.5의 유지 결정을 반영한 정확한 예측값)
 - [ ] `src/moderation/` 전체에 `client` 참조가 없다
 - [ ] `src/moderation/`가 `index.js`를 import하지 않는다
 - [ ] `/추방`, `/타임아웃` 커맨드 핸들러가 `index.js`에 그대로 남아 있고 코드가 변경되지 않았다
